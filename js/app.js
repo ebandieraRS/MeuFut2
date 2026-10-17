@@ -141,8 +141,95 @@ async function renderMatches(){
 }
 async function makeLinks(matchId){if(!confirm('Gerar o link único desta pelada? Se já existir um link, ele será substituído e o anterior deixará de funcionar.'))return;const {data,error}=await db.rpc('create_match_attendance_link',{p_match_id:matchId});if(error)return toast('Não foi possível gerar o link: '+error.message);const url=location.origin+location.pathname+'?attendance='+encodeURIComponent(data);try{await navigator.clipboard.writeText(url);alert('Link único da pelada copiado! Compartilhe este mesmo link com a turma.\n\n'+url+'\n\nAtenção: se gerar outro link para esta pelada, o anterior será invalidado.')}catch{prompt('Copie o link único da pelada e compartilhe com a turma:',url)}}
 function populateMatches(){const s=$('draw-match'),old=s.value;s.innerHTML=matches.filter(m=>m.status==='scheduled').map(m=>`<option value="${m.id}">${esc(m.title)} — ${dt(m.starts_at)}</option>`).join('');if(old)s.value=old}
-$('draw-form').addEventListener('submit',async e=>{e.preventDefault();const id=$('draw-match').value,n=+$('team-count').value;if(!id)return toast('Crie um jogo primeiro');const {data:a,error}=await db.from('attendance').select('member_id, group_members(id,display_name,skill_level)').eq('match_id',id).eq('status','confirmed');if(error)return toast(error.message);const ps=(a||[]).map(x=>x.group_members).filter(Boolean).map(p=>({...p,tie:Math.random()}));if(ps.length<n)return toast('Não há jogadores suficientes');ps.sort((x,y)=>y.skill_level-x.skill_level||x.tie-y.tie);const ts=Array.from({length:n},(_,i)=>({name:'Time '+String.fromCharCode(65+i),players:[],sum:0}));for(const p of ps){const min=Math.min(...ts.map(t=>t.sum)),opts=ts.filter(t=>t.sum===min),t=opts[Math.floor(Math.random()*opts.length)];t.players.push({member_id:p.id,skill_level:p.skill_level});t.sum+=p.skill_level}const {error:saveErr}=await db.rpc('save_balanced_teams',{p_match_id:id,p_teams:ts});if(saveErr)return toast(saveErr.message);await renderTeams();toast('Times sorteados')});
-async function renderTeams(){const el=$('teams');el.innerHTML='';for(const m of matches){const {data:ts,error}=await db.from('teams').select('id,name').eq('match_id',m.id);if(error)throw error;for(const t of ts||[]){const {data:ps,error:pErr}=await db.from('team_players').select('skill_level_at_draw,group_members(display_name)').eq('team_id',t.id);if(pErr)throw pErr;const d=document.createElement('article');d.className='team';d.innerHTML=`<h3>${esc(t.name)}</h3><small>${esc(m.title)} · nível total ${(ps||[]).reduce((s,p)=>s+p.skill_level_at_draw,0)}</small><ul>${(ps||[]).map(p=>`<li>${esc(p.group_members?.display_name)} (${p.skill_level_at_draw})</li>`).join('')}</ul>`;el.appendChild(d)}}if(!el.children.length)el.innerHTML='<div class="empty">Nenhum time sorteado.</div>'}
+function shufflePlayers(list){
+ const copy=[...list];
+ for(let i=copy.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[copy[i],copy[j]]=[copy[j],copy[i]];}
+ return copy;
+}
+$('draw-form').addEventListener('submit',async e=>{
+ e.preventDefault();
+ const matchId=$('draw-match').value;
+ const teamCount=Number($('team-count').value);
+ if(!matchId)return toast('Crie um jogo primeiro.');
+ const {data:attendance,error}=await db.from('attendance')
+  .select('member_id,group_members(id,display_name,skill_level,is_goalkeeper,is_line_goalkeeper)')
+  .eq('match_id',matchId).eq('status','confirmed');
+ if(error)return toast('Não foi possível carregar os confirmados: '+error.message);
+ const players=Array.from(new Map((attendance||[])
+  .map(row=>row.group_members).filter(Boolean).map(player=>[player.id,player])).values())
+  .map(player=>({...player,skill_level:Number(player.skill_level)||3}));
+ if(players.length<teamCount)return toast('Não há jogadores suficientes para essa quantidade de times.');
+
+ // Prioridade: goleiros cadastrados como goleiro. Só usamos goleiro linha para
+ // preencher vagas de goleiro que continuem faltando.
+ const primaryKeepers=shufflePlayers(players.filter(p=>p.is_goalkeeper));
+ const lineKeepers=shufflePlayers(players.filter(p=>p.is_line_goalkeeper&&!p.is_goalkeeper));
+ const chosenKeepers=primaryKeepers.slice(0,teamCount);
+ if(chosenKeepers.length<teamCount){
+  chosenKeepers.push(...lineKeepers.slice(0,teamCount-chosenKeepers.length));
+ }
+ if(chosenKeepers.length<teamCount){
+  const eligibleCount=new Set(players.filter(p=>p.is_goalkeeper||p.is_line_goalkeeper).map(p=>p.id)).size;
+  return toast(`Para sortear ${teamCount} times com um goleiro por time, são necessários ${teamCount} goleiros (ou goleiros linha) confirmados. Encontrados: ${eligibleCount}. Atualize as marcações na aba Jogadores ou confirme mais goleiros elegíveis.`);
+ }
+
+ const teams=Array.from({length:teamCount},(_,i)=>({
+  name:'Time '+String.fromCharCode(65+i),players:[],sum:0,goalkeeper_member_id:null
+ }));
+ const selectedKeeperIds=new Set(chosenKeepers.map(p=>p.id));
+ // Distribui primeiro os goleiros escolhidos, colocando o de maior nível no
+ // time com menor soma atual; isso equilibra também a posição de goleiro.
+ const orderedKeepers=shufflePlayers(chosenKeepers).sort((a,b)=>b.skill_level-a.skill_level);
+ for(const keeper of orderedKeepers){
+  const lowest=Math.min(...teams.map(t=>t.sum));
+  const candidates=teams.filter(t=>t.sum===lowest);
+  const team=candidates[Math.floor(Math.random()*candidates.length)];
+  team.goalkeeper_member_id=keeper.id;
+  team.players.push(keeper);
+  team.sum+=keeper.skill_level;
+ }
+
+ // Distribui todos os demais confirmados pelo menor total de nível disponível.
+ const fieldPlayers=shufflePlayers(players.filter(p=>!selectedKeeperIds.has(p.id)))
+  .sort((a,b)=>b.skill_level-a.skill_level);
+ for(const player of fieldPlayers){
+  const lowest=Math.min(...teams.map(t=>t.sum));
+  const candidates=teams.filter(t=>t.sum===lowest);
+  const team=candidates[Math.floor(Math.random()*candidates.length)];
+  team.players.push(player);
+  team.sum+=player.skill_level;
+ }
+
+ const payload=teams.map(team=>({
+  name:team.name,
+  goalkeeper_member_id:team.goalkeeper_member_id,
+  players:team.players.map(player=>({member_id:player.id,skill_level:player.skill_level}))
+ }));
+ const {error:saveError}=await db.rpc('save_balanced_teams',{p_match_id:matchId,p_teams:payload});
+ if(saveError)return toast('Não foi possível salvar os times: '+saveError.message);
+ await renderTeams();
+ toast('Times sorteados com um goleiro designado por time.');
+});
+async function renderTeams(){
+ const el=$('teams');el.innerHTML='';
+ for(const match of matches){
+  const {data:teamRows,error}=await db.from('teams').select('id,name').eq('match_id',match.id).order('name');
+  if(error)throw error;
+  for(const team of teamRows||[]){
+   const {data:players,error:playersError}=await db.from('team_players')
+    .select('skill_level_at_draw,is_assigned_goalkeeper,group_members(display_name)')
+    .eq('team_id',team.id);
+   if(playersError)throw playersError;
+   const roster=players||[];
+   const total=roster.reduce((sum,p)=>sum+p.skill_level_at_draw,0);
+   roster.sort((a,b)=>Number(Boolean(b.is_assigned_goalkeeper))-Number(Boolean(a.is_assigned_goalkeeper)));
+   const card=document.createElement('article');card.className='team';
+   card.innerHTML=`<div class="team-title-row"><h3>${esc(team.name)}</h3><span class="pill">Nível total ${total}</span></div><small>${esc(match.title)} · ${dt(match.starts_at)}</small><ul>${roster.map(p=>`<li>${esc(p.group_members?.display_name||'Jogador')} ${p.is_assigned_goalkeeper?'<span class="goalkeeper-tag">🧤 Goleiro deste time</span>':''} <span class="muted">(${p.skill_level_at_draw})</span></li>`).join('')}</ul>`;
+   el.appendChild(card);
+  }
+ }
+ if(!el.children.length)el.innerHTML='<div class="empty">Nenhum time sorteado.</div>';
+}
 function populateCashMembers(){
  const select=$('cash-member');
  if(!select)return;

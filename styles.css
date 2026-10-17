@@ -63,3 +63,6 @@
 .player-flag-form{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:16px;padding:4px 0}
 .player-form-help{grid-column:1/-1;margin:-8px 0 0}
 @media(max-width:700px){.player-admin-controls{justify-content:flex-start;width:100%;max-width:none}.player-admin-controls select{flex:1}.player-flag-form{gap:12px}}
+
+.goalkeeper-tag{display:inline-block;margin:2px 4px;padding:2px 8px;border-radius:999px;background:#dbeafe;color:#1d4ed8;font-size:.72rem;font-weight:800;white-space:nowrap}
+.team-title-row{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
