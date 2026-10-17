@@ -296,6 +296,50 @@ function fillRosterList(id, players, emptyText){
  if(!players.length){const li=document.createElement('li');li.className='muted empty-list-item';li.textContent=emptyText;el.appendChild(li);return}
  players.forEach(player=>{const li=document.createElement('li');li.textContent=player.player_name;el.appendChild(li)});
 }
+function buildAttendanceClipboardText(){
+ const uniquePlayers=Array.from(new Map((publicPlayers||[]).map(player=>[player.member_id,player])).values());
+ // Use each player's latest response timestamp; do not sort alphabetically.
+ const inResponseOrder=list=>[...list].sort((a,b)=>{
+  const ta=a.attendance_updated_at?new Date(a.attendance_updated_at).getTime():Number.MAX_SAFE_INTEGER;
+  const tb=b.attendance_updated_at?new Date(b.attendance_updated_at).getTime():Number.MAX_SAFE_INTEGER;
+  return ta-tb;
+ }).map(player=>String(player.player_name||'').trim()).filter(Boolean);
+ const confirmed=inResponseOrder(uniquePlayers.filter(player=>player.attendance_status==='confirmed'));
+ const outside=inResponseOrder(uniquePlayers.filter(player=>player.attendance_status==='declined'));
+ const startsAt=uniquePlayers[0]?.starts_at;
+ let dayMonth='';
+ if(startsAt){
+  const date=new Date(startsAt);
+  if(!Number.isNaN(date.getTime()))dayMonth=`${String(date.getDate()).padStart(2,'0')}/${String(date.getMonth()+1).padStart(2,'0')}`;
+ }
+ const confirmationLink=publicToken
+  ? `${location.origin}${location.pathname}?attendance=${encodeURIComponent(publicToken)}`
+  : '';
+ const linkLine=confirmationLink?`Link para confirmar presença: ${confirmationLink}`:'';
+ return [`Lista Jogo${dayMonth?' '+dayMonth:''}`,'',linkLine,'',
+  ...confirmed.map((name,index)=>`${index+1}. ${name}`),
+  '','','FORA','',...outside].join('\n').trimEnd();
+}
+async function copyAttendanceListToClipboard(){
+ const text=buildAttendanceClipboardText();
+ try{
+  if(navigator.clipboard&&window.isSecureContext){
+   await navigator.clipboard.writeText(text);
+   return true;
+  }
+ }catch(error){console.warn('Clipboard API falhou; tentando método alternativo.',error)}
+ // Fallback para navegadores que bloqueiam Clipboard API após chamadas de rede.
+ const textarea=document.createElement('textarea');
+ textarea.value=text;textarea.setAttribute('readonly','');
+ textarea.style.position='fixed';textarea.style.left='-9999px';textarea.style.top='0';
+ document.body.appendChild(textarea);textarea.focus();textarea.select();
+ let copied=false;
+ try{copied=document.execCommand('copy')}catch(error){console.warn('Cópia alternativa falhou.',error)}
+ textarea.remove();
+ if(!copied){window.prompt('Copie esta lista de presença:',text);return false}
+ return true;
+}
+
 function renderPublicRoster(){
  const grouped={confirmed:[],declined:[],pending:[],waitlist:[]};
  publicPlayers.forEach(player=>{
@@ -363,7 +407,24 @@ $('public-refresh-roster').addEventListener('click',async()=>{
  try{await loadAttendance(publicToken,memberId)}catch(e){msg('public-message','Não foi possível atualizar a lista: '+e.message,true)}
  finally{$('public-refresh-roster').disabled=false}
 });
-async function respond(token,memberId,status){if(!memberId){msg('public-message','Escolhe teu nome primeiro.',true);return}$('yes').disabled=$('no').disabled=true;const {error}=await db.rpc('respond_to_match_attendance',{p_token:token,p_member_id:memberId,p_status:status});if(error){msg('public-message',error.message,true);renderSelectedAttendanceState();return}await loadAttendance(token,memberId);const player=publicPlayers.find(p=>p.member_id===memberId);if(player?.attendance_status==='waitlist')msg('public-message','A pelada está lotada. Você entrou na lista de espera.');else msg('public-message',status==='confirmed'?'Presença confirmada! ⚽':'Ausência registrada.')}
+async function respond(token,memberId,status){
+ if(!memberId){msg('public-message','Escolhe teu nome primeiro.',true);return}
+ $('yes').disabled=$('no').disabled=true;
+ const {error}=await db.rpc('respond_to_match_attendance',{p_token:token,p_member_id:memberId,p_status:status});
+ if(error){msg('public-message',error.message,true);renderSelectedAttendanceState();return}
+ await loadAttendance(token,memberId);
+ const player=publicPlayers.find(p=>p.member_id===memberId);
+ const responseMessage=player?.attendance_status==='waitlist'
+  ?'A pelada está lotada. Você entrou na lista de espera.'
+  :status==='confirmed'?'Presença confirmada! ⚽':'Ausência registrada.';
+ msg('public-message',responseMessage);
+ const copied=await copyAttendanceListToClipboard();
+ if(copied){
+  msg('public-message',responseMessage+' Lista atualizada copiada para a área de transferência.');
+ }else{
+  msg('public-message',responseMessage+' Se a cópia automática não funcionou, a lista ficou disponível na janela para copiar manualmente.');
+ }
+}
 
 // A guest is created by a tightly-scoped server-side RPC using the match link token.
 // The database sets skill_level=3 and records attendance in the same transaction.
