@@ -22,7 +22,20 @@ function renderAuth(){show('login',!session);show('dashboard',!!session);show('l
 $('login-form').addEventListener('submit',async e=>{e.preventDefault();msg('login-message','Entrando…');const {data,error}=await db.auth.signInWithPassword({email:$('email').value.trim(),password:$('password').value});if(error)return msg('login-message',error.message,true);session=data.session;renderAuth();try{await loadApp()}catch(err){msg('login-message',err.message,true)}});
 $('logout').addEventListener('click',async()=>{await db.auth.signOut();session=null;renderAuth()});
 $('refresh').addEventListener('click',()=>loadApp().catch(e=>toast(e.message)));
-document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.tabpage').forEach(x=>show(x.id==='tab-'+b.dataset.tab))}));
+document.querySelectorAll('.tab').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => {
+      x.classList.toggle('active', x === b);
+    });
+
+    document.querySelectorAll('.tabpage').forEach(x => {
+      x.classList.toggle(
+        'hidden',
+        x.id !== `tab-${b.dataset.tab}`
+      );
+    });
+  });
+});
 async function loadApp(){
  if(!session)return;
  const {data:me,error}=await db.from('group_members').select('id,role').eq('group_id',cfg.GROUP_ID).eq('user_id',session.user.id).eq('active',true).maybeSingle();
