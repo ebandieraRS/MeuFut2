@@ -37,7 +37,7 @@ async function loadAppInternal(){
  const {data:me,error}=await db.from('group_members').select('id,role').eq('group_id',cfg.GROUP_ID).eq('user_id',userId).eq('active',true).maybeSingle();
  if(error)throw error;if(!me){await db.auth.signOut();throw new Error('Esta conta não está cadastrada como integrante ativo do grupo.')}
  admin=me.role==='admin';document.querySelectorAll('.admin-only').forEach(el=>show(el.id?el.id:el,admin));
- const a=await db.from('group_members').select('id,display_name,skill_level,active').eq('group_id',cfg.GROUP_ID).eq('active',true).order('display_name');if(a.error)throw a.error;members=a.data||[];
+ const a=await db.from('group_members').select('id,display_name,skill_level,active').eq('group_id',cfg.GROUP_ID).eq('active',true).order('display_name');if(a.error)throw a.error;members=a.data||[];populateCashMembers();updateCashFields();
  const b=await db.from('matches').select('id,title,starts_at,location,player_limit,status').eq('group_id',cfg.GROUP_ID).order('starts_at');if(b.error)throw b.error;
  // Defensive deduplication by primary key. The database query itself should return unique IDs.
  matches=Array.from(new Map((b.data||[]).map(match=>[match.id,match])).values());
@@ -92,8 +92,62 @@ async function makeLinks(matchId){if(!confirm('Gerar o link único desta pelada?
 function populateMatches(){const s=$('draw-match'),old=s.value;s.innerHTML=matches.filter(m=>m.status==='scheduled').map(m=>`<option value="${m.id}">${esc(m.title)} — ${dt(m.starts_at)}</option>`).join('');if(old)s.value=old}
 $('draw-form').addEventListener('submit',async e=>{e.preventDefault();const id=$('draw-match').value,n=+$('team-count').value;if(!id)return toast('Crie um jogo primeiro');const {data:a,error}=await db.from('attendance').select('member_id, group_members(id,display_name,skill_level)').eq('match_id',id).eq('status','confirmed');if(error)return toast(error.message);const ps=(a||[]).map(x=>x.group_members).filter(Boolean).map(p=>({...p,tie:Math.random()}));if(ps.length<n)return toast('Não há jogadores suficientes');ps.sort((x,y)=>y.skill_level-x.skill_level||x.tie-y.tie);const ts=Array.from({length:n},(_,i)=>({name:'Time '+String.fromCharCode(65+i),players:[],sum:0}));for(const p of ps){const min=Math.min(...ts.map(t=>t.sum)),opts=ts.filter(t=>t.sum===min),t=opts[Math.floor(Math.random()*opts.length)];t.players.push({member_id:p.id,skill_level:p.skill_level});t.sum+=p.skill_level}const {error:saveErr}=await db.rpc('save_balanced_teams',{p_match_id:id,p_teams:ts});if(saveErr)return toast(saveErr.message);await renderTeams();toast('Times sorteados')});
 async function renderTeams(){const el=$('teams');el.innerHTML='';for(const m of matches){const {data:ts,error}=await db.from('teams').select('id,name').eq('match_id',m.id);if(error)throw error;for(const t of ts||[]){const {data:ps,error:pErr}=await db.from('team_players').select('skill_level_at_draw,group_members(display_name)').eq('team_id',t.id);if(pErr)throw pErr;const d=document.createElement('article');d.className='team';d.innerHTML=`<h3>${esc(t.name)}</h3><small>${esc(m.title)} · nível total ${(ps||[]).reduce((s,p)=>s+p.skill_level_at_draw,0)}</small><ul>${(ps||[]).map(p=>`<li>${esc(p.group_members?.display_name)} (${p.skill_level_at_draw})</li>`).join('')}</ul>`;el.appendChild(d)}}if(!el.children.length)el.innerHTML='<div class="empty">Nenhum time sorteado.</div>'}
-async function renderCash(){const {data:bal,error}=await db.rpc('get_group_balance',{p_group_id:cfg.GROUP_ID});if(error)throw error;$('cash-balance').textContent=money(bal);$('balance').textContent=money(bal);const el=$('transactions');el.innerHTML='';if(!admin)return;const {data:rows,error:err}=await db.from('cash_transactions').select('type,amount_cents,description,occurred_at').eq('group_id',cfg.GROUP_ID).order('occurred_at',{ascending:false}).limit(50);if(err)throw err;if(!rows?.length){el.innerHTML='<div class="empty">Nenhuma movimentação.</div>';return}rows.forEach(t=>{const d=document.createElement('article');d.className='item';d.innerHTML=`<div><b>${esc(t.description)}</b><small>${dt(t.occurred_at)}</small></div><strong class="${t.type==='income'?'positive':'negative'}">${t.type==='income'?'+':'−'} ${money(t.amount_cents)}</strong>`;el.appendChild(d)})}
-$('cash-form').addEventListener('submit',async e=>{e.preventDefault();const value=Number($('cash-amount').value);if(!Number.isFinite(value)||value<=0)return toast('Valor inválido');const {error}=await db.from('cash_transactions').insert({group_id:cfg.GROUP_ID,type:$('cash-type').value,amount_cents:Math.round(value*100),description:$('cash-description').value.trim(),created_by:session.user.id});if(error)return toast(error.message);$('cash-amount').value='';$('cash-description').value='';await renderCash()});
+function populateCashMembers(){
+ const select=$('cash-member');
+ if(!select)return;
+ const current=select.value;
+ select.innerHTML='<option value="">Selecione um jogador…</option>'+members.map(p=>`<option value="${p.id}">${esc(p.display_name)}</option>`).join('');
+ if(members.some(p=>p.id===current))select.value=current;
+}
+function updateCashFields(){
+ const isIncome=$('cash-type').value==='income';
+ show('cash-member-wrap',isIncome);
+ show('cash-month-wrap',isIncome);
+ $('cash-member').required=isIncome;
+ $('cash-month').required=isIncome;
+}
+$('cash-type').addEventListener('change',updateCashFields);
+async function renderCash(){
+ const {data:bal,error}=await db.rpc('get_group_balance',{p_group_id:cfg.GROUP_ID});
+ if(error)throw error;
+ $('cash-balance').textContent=money(bal);
+ $('balance').textContent=money(bal);
+ const el=$('transactions');el.innerHTML='';if(!admin)return;
+ const {data:rows,error:err}=await db.from('cash_transactions')
+  .select('type,amount_cents,description,occurred_at,member_id,reference_month,group_members(display_name)')
+  .eq('group_id',cfg.GROUP_ID).order('occurred_at',{ascending:false}).limit(100);
+ if(err)throw err;
+ if(!rows?.length){el.innerHTML='<div class="empty">Nenhuma movimentação.</div>';return;}
+ rows.forEach(t=>{
+  const d=document.createElement('article');d.className='item';
+  const month=t.reference_month?`${t.reference_month.slice(5,7)}/${t.reference_month.slice(0,4)}`:null;
+  const detail=t.type==='income'
+   ? `<small>Pago por: ${esc(t.group_members?.display_name || (t.member_id?'Jogador não encontrado':'Registro antigo sem vínculo'))}</small><small>Mês de referência: ${month?esc(month):'não informado (registro antigo)'}</small>`
+   : '';
+  d.innerHTML=`<div><b>${esc(t.description)}</b><small>${dt(t.occurred_at)}</small>${detail}</div><strong class="${t.type==='income'?'positive':'negative'}">${t.type==='income'?'+':'−'} ${money(t.amount_cents)}</strong>`;
+  el.appendChild(d);
+ });
+}
+$('cash-form').addEventListener('submit',async e=>{
+ e.preventDefault();
+ const type=$('cash-type').value;
+ const value=Number($('cash-amount').value);
+ if(!Number.isFinite(value)||value<=0)return toast('Informe um valor maior que zero.');
+ let memberId=null, referenceMonth=null;
+ if(type==='income'){
+  memberId=$('cash-member').value;
+  const month=$('cash-month').value;
+  if(!memberId)return toast('Selecione o jogador que fez o pagamento.');
+  if(!month)return toast('Informe o mês a que o pagamento se refere.');
+  referenceMonth=`${month}-01`;
+ }
+ const payload={group_id:cfg.GROUP_ID,type,amount_cents:Math.round(value*100),description:$('cash-description').value.trim(),created_by:session.user.id,member_id:memberId,reference_month:referenceMonth};
+ const {error}=await db.from('cash_transactions').insert(payload);
+ if(error)return toast(error.message);
+ $('cash-amount').value='';$('cash-description').value='';$('cash-member').value='';
+ toast(type==='income'?'Pagamento registrado.':'Despesa registrada.');
+ await renderCash();
+});
 function renderStats(){const m=matches.find(x=>x.status==='scheduled'&&new Date(x.starts_at)>=new Date());$('next-game').textContent=m?.title||'—';$('next-date').textContent=m?dt(m.starts_at):'Nenhum jogo futuro';if(!m){$('confirmed').textContent='0';return}db.from('attendance').select('id',{count:'exact',head:true}).eq('match_id',m.id).eq('status','confirmed').then(r=>{if(!r.error)$('confirmed').textContent=String(r.count||0)})}
 async function loadPublicBalance(){const {data,error}=await db.rpc('get_group_balance',{p_group_id:cfg.GROUP_ID});if(error){msg('balance-message','Não foi possível consultar o saldo: '+error.message,true);return}$('public-balance-value').textContent=money(data)}
 function fillRosterList(id, players, emptyText){
