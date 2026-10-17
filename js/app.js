@@ -155,7 +155,54 @@ async function deleteMatch(matchId){
  await loadApp();
 }
 async function makeLinks(matchId){if(!confirm('Gerar o link único desta pelada? Se já existir um link, ele será substituído e o anterior deixará de funcionar.'))return;const {data,error}=await db.rpc('create_match_attendance_link',{p_match_id:matchId});if(error)return toast('Não foi possível gerar o link: '+error.message);const url=location.origin+location.pathname+'?attendance='+encodeURIComponent(data);try{await navigator.clipboard.writeText(url);alert('Link único da pelada copiado! Compartilhe este mesmo link com a turma.\n\n'+url+'\n\nAtenção: se gerar outro link para esta pelada, o anterior será invalidado.')}catch{prompt('Copie o link único da pelada e compartilhe com a turma:',url)}}
-function populateMatches(){const s=$('draw-match'),old=s.value;s.innerHTML=matches.filter(m=>m.status==='scheduled').map(m=>`<option value="${m.id}">${esc(m.title)} — ${dt(m.starts_at)}</option>`).join('');if(old)s.value=old}
+function populateMatches(){
+ const s=$('draw-match'),old=s.value;
+ s.innerHTML=matches.filter(m=>m.status==='scheduled').map(m=>`<option value="${m.id}">${esc(m.title)} — ${dt(m.starts_at)}</option>`).join('');
+ if(old)s.value=old;
+ populateCashMatches();
+}
+function populateCashMatches(){
+ const s=$('cash-match');
+ if(!s)return;
+ const old=s.value;
+ // Completed games are valid for recording their court payment; cancelled games are excluded.
+ const eligible=matches.filter(m=>m.status!=='cancelled');
+ s.innerHTML='<option value="">Selecione um jogo…</option>'+eligible.map(m=>`<option value="${m.id}">${esc(m.title)} — ${new Date(m.starts_at).toLocaleDateString('pt-BR')}</option>`).join('');
+ if(eligible.some(m=>m.id===old))s.value=old;
+ updateCashDescription();
+}
+function monthReferenceLabel(value){
+ if(!value)return '';
+ const parts=value.split('-');
+ if(parts.length!==2)return '';
+ const year=Number(parts[0]),month=Number(parts[1]);
+ if(!year||month<1||month>12)return '';
+ const monthName=new Intl.DateTimeFormat('pt-BR',{month:'long',timeZone:'UTC'}).format(new Date(Date.UTC(year,month-1,1)));
+ return `${monthName}/${year}`;
+}
+function matchDateLabel(match){
+ const date=new Date(match.starts_at);
+ return Number.isNaN(date.getTime())?'':date.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric'});
+}
+function updateCashDescription(){
+ const description=$('cash-description');
+ if(!description)return;
+ if($('cash-type').value==='income'){
+  const monthLabel=monthReferenceLabel($('cash-month').value);
+  description.value=monthLabel?`Mensalidade mês ${monthLabel}`:'';
+  $('cash-description-help').textContent=monthLabel
+   ?`Descrição automática para a referência ${monthLabel}.`
+   :'Selecione o mês de referência.';
+ }else{
+  const selectedMatch=$('cash-match').value;
+  const match=matches.find(m=>m.id===selectedMatch);
+  const dateLabel=match?matchDateLabel(match):'';
+  description.value=dateLabel?`Pagamento quadra + ${dateLabel}`:'';
+  $('cash-description-help').textContent=match
+   ?`Despesa vinculada a ${match.title}, em ${dateLabel}.`
+   :'Selecione o jogo ao qual o pagamento da quadra se refere.';
+ }
+}
 function shufflePlayers(list){
  const copy=[...list];
  for(let i=copy.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[copy[i],copy[j]]=[copy[j],copy[i]];}
@@ -259,10 +306,15 @@ function updateCashFields(){
  const isIncome=$('cash-type').value==='income';
  show('cash-member-wrap',isIncome);
  show('cash-month-wrap',isIncome);
+ show('cash-match-wrap',!isIncome);
  $('cash-member').required=isIncome;
  $('cash-month').required=isIncome;
+ $('cash-match').required=!isIncome;
+ updateCashDescription();
 }
 $('cash-type').addEventListener('change',updateCashFields);
+$('cash-month').addEventListener('change',updateCashDescription);
+$('cash-match').addEventListener('change',updateCashDescription);
 async function renderCash(){
  const {data:bal,error}=await db.rpc('get_group_balance',{p_group_id:cfg.GROUP_ID});
  if(error)throw error;
@@ -286,22 +338,50 @@ async function renderCash(){
 }
 $('cash-form').addEventListener('submit',async e=>{
  e.preventDefault();
+ if(!admin)return toast('Somente administradores podem registrar movimentações.');
  const type=$('cash-type').value;
  const value=Number($('cash-amount').value);
  if(!Number.isFinite(value)||value<=0)return toast('Informe um valor maior que zero.');
- let memberId=null, referenceMonth=null;
+
+ let memberId=null, referenceMonth=null, relatedMatchId=null, description='';
  if(type==='income'){
   memberId=$('cash-member').value;
   const month=$('cash-month').value;
   if(!memberId)return toast('Selecione o jogador que fez o pagamento.');
   if(!month)return toast('Informe o mês a que o pagamento se refere.');
   referenceMonth=`${month}-01`;
+  const monthLabel=monthReferenceLabel(month);
+  if(!monthLabel)return toast('Mês de referência inválido.');
+  description=`Mensalidade mês ${monthLabel}`;
+ }else{
+  relatedMatchId=$('cash-match').value;
+  if(!relatedMatchId)return toast('Selecione o jogo a que o pagamento da quadra se refere.');
+  const match=matches.find(m=>m.id===relatedMatchId);
+  if(!match)return toast('O jogo selecionado não foi encontrado. Atualize o painel e tente novamente.');
+  const dateLabel=matchDateLabel(match);
+  if(!dateLabel)return toast('Não foi possível obter a data do jogo.');
+  description=`Pagamento quadra + ${dateLabel}`;
  }
- const payload={group_id:cfg.GROUP_ID,type,amount_cents:Math.round(value*100),description:$('cash-description').value.trim(),created_by:session.user.id,member_id:memberId,reference_month:referenceMonth};
+ $('cash-description').value=description;
+ const payload={
+  group_id:cfg.GROUP_ID,
+  type,
+  amount_cents:Math.round(value*100),
+  description,
+  created_by:session.user.id,
+  member_id:memberId,
+  reference_month:referenceMonth,
+  match_id:relatedMatchId
+ };
  const {error}=await db.from('cash_transactions').insert(payload);
  if(error)return toast(error.message);
- $('cash-amount').value='';$('cash-description').value='';$('cash-member').value='';
- toast(type==='income'?'Pagamento registrado.':'Despesa registrada.');
+ $('cash-amount').value='';
+ $('cash-description').value='';
+ $('cash-member').value='';
+ $('cash-month').value='';
+ $('cash-match').value='';
+ updateCashFields();
+ toast(type==='income'?'Mensalidade registrada.':'Pagamento da quadra registrado.');
  await renderCash();
 });
 function renderStats(){const m=matches.find(x=>x.status==='scheduled'&&new Date(x.starts_at)>=new Date());$('next-game').textContent=m?.title||'—';$('next-date').textContent=m?dt(m.starts_at):'Nenhum jogo futuro';if(!m){$('confirmed').textContent='0';return}db.from('attendance').select('id',{count:'exact',head:true}).eq('match_id',m.id).eq('status','confirmed').then(r=>{if(!r.error)$('confirmed').textContent=String(r.count||0)})}
