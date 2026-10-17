@@ -37,16 +37,67 @@ async function loadAppInternal(){
  const {data:me,error}=await db.from('group_members').select('id,role').eq('group_id',cfg.GROUP_ID).eq('user_id',userId).eq('active',true).maybeSingle();
  if(error)throw error;if(!me){await db.auth.signOut();throw new Error('Esta conta não está cadastrada como integrante ativo do grupo.')}
  admin=me.role==='admin';document.querySelectorAll('.admin-only').forEach(el=>show(el.id?el.id:el,admin));
- const a=await db.from('group_members').select('id,display_name,skill_level,active').eq('group_id',cfg.GROUP_ID).eq('active',true).order('display_name');if(a.error)throw a.error;members=a.data||[];populateCashMembers();updateCashFields();
+ const a=await db.from('group_members').select('id,display_name,skill_level,active,is_goalkeeper,is_line_goalkeeper,is_fixed').eq('group_id',cfg.GROUP_ID).eq('active',true).order('display_name');if(a.error)throw a.error;members=a.data||[];populateCashMembers();updateCashFields();
  const b=await db.from('matches').select('id,title,starts_at,location,player_limit,status').eq('group_id',cfg.GROUP_ID).order('starts_at');if(b.error)throw b.error;
  // Defensive deduplication by primary key. The database query itself should return unique IDs.
  matches=Array.from(new Map((b.data||[]).map(match=>[match.id,match])).values());
  await renderPlayers();await renderMatches();await renderTeams();await renderCash();renderStats();populateMatches();
 }
-$('player-form').addEventListener('submit',async e=>{e.preventDefault();const {error}=await db.from('group_members').insert({group_id:cfg.GROUP_ID,display_name:$('player-name').value.trim(),skill_level:+$('player-level').value,role:'player'});if(error)return toast(error.message);$('player-name').value='';await loadApp()});
-async function renderPlayers(){const el=$('players');el.innerHTML='';if(!members.length){el.innerHTML='<div class="empty">Nenhum jogador cadastrado.</div>';return}members.forEach(p=>{const d=document.createElement('article');d.className='item';d.innerHTML=`<div><b>${esc(p.display_name)}</b><small>Nível ${p.skill_level}</small></div>${admin?`<div class="actions"><select data-level="${p.id}">${[1,2,3,4,5].map(n=>`<option ${n===p.skill_level?'selected':''} value="${n}">Nível ${n}</option>`).join('')}</select><button class="secondary" data-disable="${p.id}">Desativar</button></div>`:''}`;el.appendChild(d)});
-el.querySelectorAll('[data-level]').forEach(x=>x.onchange=async()=>{const {error}=await db.from('group_members').update({skill_level:+x.value}).eq('id',x.dataset.level);if(error)toast(error.message)});
-el.querySelectorAll('[data-disable]').forEach(x=>x.onclick=async()=>{if(!confirm('Desativar jogador?'))return;const {error}=await db.from('group_members').update({active:false}).eq('id',x.dataset.disable);if(error)toast(error.message);else loadApp()})}
+$('player-form').addEventListener('submit',async e=>{
+ e.preventDefault();
+ const payload={
+  group_id:cfg.GROUP_ID,
+  display_name:$('player-name').value.trim(),
+  skill_level:+$('player-level').value,
+  role:'player',
+  is_goalkeeper:$('player-is-goalkeeper').checked,
+  is_line_goalkeeper:$('player-is-line-goalkeeper').checked,
+  is_fixed:$('player-is-fixed').checked
+ };
+ const {error}=await db.from('group_members').insert(payload);
+ if(error)return toast(error.message);
+ $('player-name').value='';
+ $('player-level').value='3';
+ $('player-is-goalkeeper').checked=false;
+ $('player-is-line-goalkeeper').checked=false;
+ $('player-is-fixed').checked=false;
+ toast('Jogador cadastrado.');
+ await loadApp();
+});
+async function renderPlayers(){
+ const el=$('players');el.innerHTML='';
+ if(!members.length){el.innerHTML='<div class="empty">Nenhum jogador cadastrado.</div>';return;}
+ members.forEach(p=>{
+  const badges=[p.is_goalkeeper?'Goleiro':null,p.is_line_goalkeeper?'Goleiro linha':null,p.is_fixed?'Fixo · mensalista':null].filter(Boolean);
+  const badgeMarkup=badges.length?badges.map(label=>`<span class="player-badge">${label}</span>`).join(''):'<span class="muted small">Sem marcações</span>';
+  const d=document.createElement('article');d.className='item player-item';
+  d.innerHTML=`<div class="player-main"><div class="player-name-row"><b>${esc(p.display_name)}</b><span class="pill">Nível ${p.skill_level}</span></div><div class="player-badges">${badgeMarkup}</div></div>${admin?`<div class="player-admin-controls"><label class="check-label"><input type="checkbox" data-player-flag="is_goalkeeper" data-player="${p.id}" ${p.is_goalkeeper?'checked':''}> Goleiro</label><label class="check-label"><input type="checkbox" data-player-flag="is_line_goalkeeper" data-player="${p.id}" ${p.is_line_goalkeeper?'checked':''}> Goleiro linha</label><label class="check-label"><input type="checkbox" data-player-flag="is_fixed" data-player="${p.id}" ${p.is_fixed?'checked':''}> Fixo</label><select aria-label="Nível de ${esc(p.display_name)}" data-level="${p.id}">${[1,2,3,4,5].map(n=>`<option ${n===p.skill_level?'selected':''} value="${n}">Nível ${n}</option>`).join('')}</select><button class="secondary" data-disable="${p.id}">Desativar</button></div>`:''}`;
+  el.appendChild(d);
+ });
+ el.querySelectorAll('[data-level]').forEach(x=>x.onchange=async()=>{
+  const id=x.dataset.level;const previous=members.find(p=>p.id===id)?.skill_level;
+  x.disabled=true;
+  const {error}=await db.from('group_members').update({skill_level:+x.value}).eq('id',id).eq('group_id',cfg.GROUP_ID);
+  x.disabled=false;
+  if(error){if(previous)x.value=String(previous);toast('Não foi possível atualizar o nível: '+error.message);return;}
+  const p=members.find(p=>p.id===id);if(p)p.skill_level=+x.value;
+  const name=members.find(p=>p.id===id)?.display_name||'Jogador';
+  toast('Nível de '+name+' atualizado.');
+ });
+ el.querySelectorAll('[data-player-flag]').forEach(x=>x.addEventListener('change',async()=>{
+  const id=x.dataset.player,field=x.dataset.playerFlag,next=x.checked;
+  const player=members.find(p=>p.id===id);
+  x.disabled=true;
+  const {error}=await db.from('group_members').update({[field]:next}).eq('id',id).eq('group_id',cfg.GROUP_ID);
+  x.disabled=false;
+  if(error){x.checked=!next;toast('Não foi possível salvar a marcação: '+error.message);return;}
+  if(player)player[field]=next;
+  const labels={is_goalkeeper:'Goleiro',is_line_goalkeeper:'Goleiro linha',is_fixed:'Fixo / mensalista'};
+  toast(`${labels[field]} ${next?'ativado':'desativado'} para ${player?.display_name||'jogador'}.`);
+  await renderPlayers();
+ }));
+ el.querySelectorAll('[data-disable]').forEach(x=>x.onclick=async()=>{if(!confirm('Desativar jogador?'))return;const {error}=await db.from('group_members').update({active:false}).eq('id',x.dataset.disable).eq('group_id',cfg.GROUP_ID);if(error)toast(error.message);else await loadApp();});
+}
 $('match-form').addEventListener('submit',async e=>{e.preventDefault();const date=new Date($('match-date').value);if(isNaN(date))return toast('Data inválida');const {error}=await db.from('matches').insert({group_id:cfg.GROUP_ID,title:$('match-name').value.trim(),starts_at:date.toISOString(),location:$('match-location').value.trim()||null,player_limit:+$('match-limit').value,status:'scheduled'});if(error)return toast(error.message);await loadApp()});
 async function renderMatches(){
  const el=$('matches');
