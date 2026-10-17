@@ -168,10 +168,9 @@ $('draw-form').addEventListener('submit',async e=>{
  if(chosenKeepers.length<teamCount){
   chosenKeepers.push(...lineKeepers.slice(0,teamCount-chosenKeepers.length));
  }
- if(chosenKeepers.length<teamCount){
-  const eligibleCount=new Set(players.filter(p=>p.is_goalkeeper||p.is_line_goalkeeper).map(p=>p.id)).size;
-  return toast(`Para sortear ${teamCount} times com um goleiro por time, são necessários ${teamCount} goleiros (ou goleiros linha) confirmados. Encontrados: ${eligibleCount}. Atualize as marcações na aba Jogadores ou confirme mais goleiros elegíveis.`);
- }
+ // Não bloqueia o sorteio quando faltam goleiros elegíveis.
+ // Todos os goleiros disponíveis serão designados; os demais times ficam sem goleiro marcado.
+
 
  const teams=Array.from({length:teamCount},(_,i)=>({
   name:'Time '+String.fromCharCode(65+i),players:[],sum:0,goalkeeper_member_id:null
@@ -208,7 +207,11 @@ $('draw-form').addEventListener('submit',async e=>{
  const {error:saveError}=await db.rpc('save_balanced_teams',{p_match_id:matchId,p_teams:payload});
  if(saveError)return toast('Não foi possível salvar os times: '+saveError.message);
  await renderTeams();
- toast('Times sorteados com um goleiro designado por time.');
+ const assignedCount=teams.filter(team=>team.goalkeeper_member_id!==null).length;
+ const keeperSummary=assignedCount===teamCount
+  ? 'Todos os times têm goleiro designado.'
+  : `${assignedCount} de ${teamCount} times têm goleiro designado; os demais ficaram sem goleiro por falta de jogadores elegíveis.`;
+ toast('Times sorteados. '+keeperSummary);
 });
 async function renderTeams(){
  const el=$('teams');el.innerHTML='';
