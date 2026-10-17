@@ -35,3 +35,15 @@
  .roster-heading button{width:100%}
  .attendance-page{margin:0 auto;padding:18px}
 }
+
+
+/* Public match guest registration */
+.guest-registration{margin:20px 0 8px;border:1px solid var(--line);border-radius:12px;padding:13px 14px;background:#f8faf8}
+.guest-registration summary{cursor:pointer;color:var(--green);font-weight:800}
+.guest-registration[open] summary{margin-bottom:12px}
+.guest-registration>p{margin:0 0 12px}
+.guest-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end}
+.guest-form label{min-width:0}
+.guest-form input{margin-top:5px}
+.guest-form .message{grid-column:1/-1;margin:0}
+@media(max-width:700px){.guest-form{grid-template-columns:1fr}.guest-form button{width:100%}}

@@ -183,12 +183,16 @@ async function loadAttendance(token,preserveMemberId=null){
   $('public-title').textContent='Link inválido ou expirado';
   $('public-meta').textContent='Solicite um novo link ao administrador.';
   $('public-member-select').innerHTML='<option value="">Nenhum jogador disponível</option>';
+  $('add-guest-button').disabled=true;
+  show('guest-registration',false);
   show('public-roster-summary',false);
   msg('public-message','Este link não está mais disponível.',true);
   return;
  }
  const d=data[0];
  publicPlayers=data;
+ show('guest-registration',true);
+ $('add-guest-button').disabled=false;
  $('public-title').textContent=d.match_title;
  $('public-meta').textContent=dt(d.starts_at)+(d.location?' · '+d.location:'');
  const select=$('public-member-select');
@@ -218,6 +222,29 @@ $('public-refresh-roster').addEventListener('click',async()=>{
  try{await loadAttendance(publicToken,memberId)}catch(e){msg('public-message','Não foi possível atualizar a lista: '+e.message,true)}
  finally{$('public-refresh-roster').disabled=false}
 });
-async function respond(token,memberId,status){if(!memberId){msg('public-message','Escolhe teu nome primeiro.',true);return}$('yes').disabled=$('no').disabled=true;const {error}=await db.rpc('respond_to_match_attendance',{p_token:token,p_member_id:memberId,p_status:status});if(error){msg('public-message',error.message,true);renderSelectedAttendanceState();return}await loadAttendance(token,memberId);msg('public-message',status==='confirmed'?'Presença confirmada! ⚽':'Ausência registrada.')}
+async function respond(token,memberId,status){if(!memberId){msg('public-message','Escolhe teu nome primeiro.',true);return}$('yes').disabled=$('no').disabled=true;const {error}=await db.rpc('respond_to_match_attendance',{p_token:token,p_member_id:memberId,p_status:status});if(error){msg('public-message',error.message,true);renderSelectedAttendanceState();return}await loadAttendance(token,memberId);const player=publicPlayers.find(p=>p.member_id===memberId);if(player?.attendance_status==='waitlist')msg('public-message','A pelada está lotada. Você entrou na lista de espera.');else msg('public-message',status==='confirmed'?'Presença confirmada! ⚽':'Ausência registrada.')}
+
+// A guest is created by a tightly-scoped server-side RPC using the match link token.
+// The database sets skill_level=3 and records attendance in the same transaction.
+$('guest-form').addEventListener('submit',async e=>{
+ e.preventDefault();
+ if(!publicToken)return;
+ const name=$('guest-name').value.trim().replace(/\s+/g,' ');
+ if(name.length<2||name.length>80){msg('guest-message','Informe um nome entre 2 e 80 caracteres.',true);return;}
+ const button=$('add-guest-button');
+ button.disabled=true;
+ msg('guest-message','Cadastrando convidado…');
+ try{
+  const {data,error}=await db.rpc('add_guest_to_match',{p_token:publicToken,p_player_name:name});
+  if(error){msg('guest-message',error.message||'Não foi possível cadastrar o convidado.',true);return;}
+  $('guest-name').value='';
+  await loadAttendance(publicToken,data);
+  const added=publicPlayers.find(p=>p.member_id===data);
+  if(added?.attendance_status==='waitlist')msg('guest-message',`${added.player_name} foi cadastrado como jogador nível 3, mas a pelada está lotada e entrou na lista de espera.`);
+  else msg('guest-message',`${added?.player_name||name} foi cadastrado como jogador nível 3 e presença confirmada! ⚽`);
+ }catch(err){msg('guest-message',err.message||'Ocorreu um erro ao cadastrar o convidado.',true)}
+ finally{button.disabled=false;}
+});
+
 init().catch(e=>{console.error(e);toast('Erro: '+e.message)});
 })();
