@@ -23,13 +23,24 @@ $('login-form').addEventListener('submit',async e=>{e.preventDefault();msg('logi
 $('logout').addEventListener('click',async()=>{await db.auth.signOut();session=null;renderAuth()});
 $('refresh').addEventListener('click',()=>loadApp().catch(e=>toast(e.message)));
 document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.tabpage').forEach(x=>x.classList.toggle('hidden',x.id!=='tab-'+b.dataset.tab))}));
-async function loadApp(){
+// Prevent overlapping loads (e.g. form submit + Supabase SIGNED_IN event).
+let appLoadPromise = null;
+function loadApp() {
+ if (!session) return Promise.resolve();
+ if (appLoadPromise) return appLoadPromise;
+ appLoadPromise = loadAppInternal().finally(() => { appLoadPromise = null; });
+ return appLoadPromise;
+}
+async function loadAppInternal(){
  if(!session)return;
- const {data:me,error}=await db.from('group_members').select('id,role').eq('group_id',cfg.GROUP_ID).eq('user_id',session.user.id).eq('active',true).maybeSingle();
+ const userId = session.user.id;
+ const {data:me,error}=await db.from('group_members').select('id,role').eq('group_id',cfg.GROUP_ID).eq('user_id',userId).eq('active',true).maybeSingle();
  if(error)throw error;if(!me){await db.auth.signOut();throw new Error('Esta conta não está cadastrada como integrante ativo do grupo.')}
  admin=me.role==='admin';document.querySelectorAll('.admin-only').forEach(el=>show(el.id?el.id:el,admin));
  const a=await db.from('group_members').select('id,display_name,skill_level,active').eq('group_id',cfg.GROUP_ID).eq('active',true).order('display_name');if(a.error)throw a.error;members=a.data||[];
- const b=await db.from('matches').select('id,title,starts_at,location,player_limit,status').eq('group_id',cfg.GROUP_ID).order('starts_at');if(b.error)throw b.error;matches=b.data||[];
+ const b=await db.from('matches').select('id,title,starts_at,location,player_limit,status').eq('group_id',cfg.GROUP_ID).order('starts_at');if(b.error)throw b.error;
+ // Defensive deduplication by primary key. The database query itself should return unique IDs.
+ matches=Array.from(new Map((b.data||[]).map(match=>[match.id,match])).values());
  await renderPlayers();await renderMatches();await renderTeams();await renderCash();renderStats();populateMatches();
 }
 $('player-form').addEventListener('submit',async e=>{e.preventDefault();const {error}=await db.from('group_members').insert({group_id:cfg.GROUP_ID,display_name:$('player-name').value.trim(),skill_level:+$('player-level').value,role:'player'});if(error)return toast(error.message);$('player-name').value='';await loadApp()});
@@ -39,9 +50,12 @@ el.querySelectorAll('[data-disable]').forEach(x=>x.onclick=async()=>{if(!confirm
 $('match-form').addEventListener('submit',async e=>{e.preventDefault();const date=new Date($('match-date').value);if(isNaN(date))return toast('Data inválida');const {error}=await db.from('matches').insert({group_id:cfg.GROUP_ID,title:$('match-name').value.trim(),starts_at:date.toISOString(),location:$('match-location').value.trim()||null,player_limit:+$('match-limit').value,status:'scheduled'});if(error)return toast(error.message);await loadApp()});
 async function renderMatches(){
  const el=$('matches');
- el.innerHTML='';
  if(!matches.length){el.innerHTML='<div class="empty">Nenhum jogo criado.</div>';return}
- for(const m of matches){
+ // Build the complete list off-DOM, then replace once. This prevents duplicate cards
+ // if another refresh starts while attendance queries are still resolving.
+ const fragment=document.createDocumentFragment();
+ const uniqueMatches=Array.from(new Map(matches.map(match=>[match.id,match])).values());
+ for(const m of uniqueMatches){
   const {data:a,error}=await db.from('attendance')
     .select('member_id,status')
     .eq('match_id',m.id);
@@ -69,8 +83,9 @@ async function renderMatches(){
        <section><h3>📋 Lista de espera</h3>${listMarkup(buckets.waitlist,'Ninguém na lista de espera.')}</section>
       </div>
     </details>`;
-  el.appendChild(d);
+  fragment.appendChild(d);
  }
+ el.replaceChildren(fragment);
  el.querySelectorAll('[data-links]').forEach(b=>b.onclick=()=>makeLinks(b.dataset.links));
 }
 async function makeLinks(matchId){if(!confirm('Gerar o link único desta pelada? Se já existir um link, ele será substituído e o anterior deixará de funcionar.'))return;const {data,error}=await db.rpc('create_match_attendance_link',{p_match_id:matchId});if(error)return toast('Não foi possível gerar o link: '+error.message);const url=location.origin+location.pathname+'?attendance='+encodeURIComponent(data);try{await navigator.clipboard.writeText(url);alert('Link único da pelada copiado! Compartilhe este mesmo link com a turma.\n\n'+url+'\n\nAtenção: se gerar outro link para esta pelada, o anterior será invalidado.')}catch{prompt('Copie o link único da pelada e compartilhe com a turma:',url)}}
