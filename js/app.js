@@ -124,7 +124,7 @@ async function renderMatches(){
   const listMarkup=(names,emptyText)=>names.length?`<ul>${names.map(name=>`<li>${esc(name)}</li>`).join('')}</ul>`:`<p class="muted small">${emptyText}</p>`;
   const d=document.createElement('article');
   d.className='item match-item';
-  d.innerHTML=`<div class="match-summary"><div><b>${esc(m.title)}</b><small>${dt(m.starts_at)}${m.location?' · '+esc(m.location):''}</small><span class="pill">${count}${m.player_limit?' / '+m.player_limit:''} confirmados</span></div>${admin?`<button class="secondary" data-links="${m.id}">Gerar link da pelada</button>`:''}</div>
+  d.innerHTML=`<div class="match-summary"><div><b>${esc(m.title)}</b><small>${dt(m.starts_at)}${m.location?' · '+esc(m.location):''}</small><span class="pill">${count}${m.player_limit?' / '+m.player_limit:''} confirmados</span></div>${admin?`<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="secondary" data-links="${m.id}">Gerar link da pelada</button><button class="secondary" data-delete-match="${m.id}" style="border-color:#ef4444;color:#b91c1c">Excluir pelada</button></div>`:''}</div>
     <details class="attendance-details"><summary>Ver lista de presença · ${count} confirmados, ${buckets.pending.length} pendentes</summary>
       <div class="roster-counts"><span class="status-chip status-confirmed">${count} confirmados</span><span class="status-chip status-declined">${buckets.declined.length} não vão</span><span class="status-chip status-pending">${buckets.pending.length} pendentes</span><span class="status-chip status-waitlist">${buckets.waitlist.length} em espera</span></div>
       <div class="attendance-columns">
@@ -138,6 +138,21 @@ async function renderMatches(){
  }
  el.replaceChildren(fragment);
  el.querySelectorAll('[data-links]').forEach(b=>b.onclick=()=>makeLinks(b.dataset.links));
+ el.querySelectorAll('[data-delete-match]').forEach(b=>b.onclick=()=>deleteMatch(b.dataset.deleteMatch));
+}
+async function deleteMatch(matchId){
+ if(!admin)return toast('Somente administradores podem excluir peladas.');
+ const match=matches.find(item=>item.id===matchId);
+ if(!match)return toast('Pelada não encontrada. Atualize a página e tente novamente.');
+ const warning=`Deseja realmente excluir a pelada "${match.title}" (${dt(match.starts_at)})?\n\nEsta ação remove a pelada, as presenças, os links e os times associados. Não pode ser desfeita.`;
+ if(!confirm(warning))return;
+ const {error}=await db.from('matches').delete().eq('id',matchId).eq('group_id',cfg.GROUP_ID);
+ if(error){
+  console.error('Erro ao excluir pelada:',error);
+  return toast('Não foi possível excluir a pelada: '+error.message);
+ }
+ toast('Pelada excluída.');
+ await loadApp();
 }
 async function makeLinks(matchId){if(!confirm('Gerar o link único desta pelada? Se já existir um link, ele será substituído e o anterior deixará de funcionar.'))return;const {data,error}=await db.rpc('create_match_attendance_link',{p_match_id:matchId});if(error)return toast('Não foi possível gerar o link: '+error.message);const url=location.origin+location.pathname+'?attendance='+encodeURIComponent(data);try{await navigator.clipboard.writeText(url);alert('Link único da pelada copiado! Compartilhe este mesmo link com a turma.\n\n'+url+'\n\nAtenção: se gerar outro link para esta pelada, o anterior será invalidado.')}catch{prompt('Copie o link único da pelada e compartilhe com a turma:',url)}}
 function populateMatches(){const s=$('draw-match'),old=s.value;s.innerHTML=matches.filter(m=>m.status==='scheduled').map(m=>`<option value="${m.id}">${esc(m.title)} — ${dt(m.starts_at)}</option>`).join('');if(old)s.value=old}
