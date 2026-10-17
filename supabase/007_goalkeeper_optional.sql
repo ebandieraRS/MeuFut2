@@ -116,7 +116,7 @@ BEGIN
       INSERT INTO public.team_players(
         team_id, member_id, skill_level_at_draw, is_assigned_goalkeeper
       ) VALUES (
-        v_team_id, v_member_id, v_level, (v_member_id = v_keeper_id)
+        v_team_id, v_member_id, v_level, coalesce(v_member_id = v_keeper_id, false)
       );
     END LOOP;
   END LOOP;
