@@ -581,8 +581,8 @@ $('guest-form').addEventListener('submit',async e=>{
   $('guest-name').value='';
   await loadAttendance(publicToken,data);
   const added=publicPlayers.find(p=>p.member_id===data);
-  if(added?.attendance_status==='waitlist')msg('guest-message',`${added.player_name} foi cadastrado como jogador nível 3, mas a pelada está lotada e entrou na lista de espera.`);
-  else msg('guest-message',`${added?.player_name||name} foi cadastrado como jogador nível 3 e presença confirmada! ⚽`);
+  if(added?.attendance_status==='waitlist')msg('guest-message',`${added.player_name} foi cadastrado, mas a pelada está lotada e entrou na lista de espera.`);
+  else msg('guest-message',`${added?.player_name||name} foi cadastrado e teve sua presença confirmada! ⚽`);
  }catch(err){msg('guest-message',err.message||'Ocorreu um erro ao cadastrar o convidado.',true)}
  finally{button.disabled=false;}
 });
