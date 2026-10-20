@@ -521,7 +521,8 @@ async function loadAttendance(token,preserveMemberId=null){
  $('public-meta').textContent=dt(d.starts_at)+(d.location?' · '+d.location:'');
  const select=$('public-member-select');
  const previous=preserveMemberId||select.value;
- select.innerHTML='<option value="">Selecione teu nome…</option>'+publicPlayers.map(p=>`<option value="${p.member_id}">${esc(p.player_name)}</option>`).join('');
+ const alphabeticPlayers=[...publicPlayers].sort((a,b)=>String(a.player_name||'').localeCompare(String(b.player_name||''),'pt-BR',{sensitivity:'base'}));
+ select.innerHTML='<option value="">Selecione teu nome…</option>'+alphabeticPlayers.map(p=>`<option value="${p.member_id}">${esc(p.player_name)}</option>`).join('');
  if(previous&&publicPlayers.some(p=>p.member_id===previous))select.value=previous;
  select.disabled=false;
  select.onchange=renderSelectedAttendanceState;
