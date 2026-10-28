@@ -12,6 +12,7 @@ function msg(id,s,error=false){$(id).textContent=s;$(id).classList.toggle('error
 function setup(){if(!cfgReady||!window.supabase){show('setup');$('setup').textContent='Edite js/config.js com a URL, publishable key e UUID do grupo Supabase.';return false}db=window.supabase.createClient(cfg.SUPABASE_URL,cfg.SUPABASE_PUBLISHABLE_KEY);return true}
 async function init(){
  const q=new URLSearchParams(location.search);
+ if(q.has('historico')){if(!setup())return;show('public-history');await loadMatchHistory('history-games-public');return}
  if(q.has('grupo')){if(!setup())return;show('public-attendance');await loadGroupAttendance(q.get('grupo'));return}
  if(q.has('attendance')){if(!setup())return;show('public-attendance');await loadAttendance(q.get('attendance'));return}
  if(q.has('caixa')){if(!setup())return;show('public-balance');await loadPublicBalance();return}
@@ -24,7 +25,8 @@ function renderAuth(){show('login',!session);show('dashboard',!!session);show('l
 $('login-form').addEventListener('submit',async e=>{e.preventDefault();msg('login-message','Entrando…');const {data,error}=await db.auth.signInWithPassword({email:$('email').value.trim(),password:$('password').value});if(error)return msg('login-message',error.message,true);session=data.session;renderAuth();try{await loadApp()}catch(err){msg('login-message',err.message,true)}});
 $('logout').addEventListener('click',async()=>{await db.auth.signOut();session=null;renderAuth()});
 $('refresh').addEventListener('click',()=>loadApp().catch(e=>toast(e.message)));
-document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.tabpage').forEach(x=>x.classList.toggle('hidden',x.id!=='tab-'+b.dataset.tab))}));
+document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.tabpage').forEach(x=>x.classList.toggle('hidden',x.id!=='tab-'+b.dataset.tab));if(b.dataset.tab==='history')loadMatchHistory('history-games-admin')}));
+$('refresh-history').addEventListener('click',()=>loadMatchHistory('history-games-admin'));
 // Prevent overlapping loads (e.g. form submit + Supabase SIGNED_IN event).
 let appLoadPromise = null;
 function loadApp() {
@@ -51,7 +53,7 @@ async function loadAppInternal(){
    const aDate=new Date(a.starts_at).getTime(),bDate=new Date(b.starts_at).getTime();
    return a.status==='scheduled'?aDate-bDate:bDate-aDate;
   });
- await renderPlayers();await renderMatches();await renderTeams();await renderCash();renderStats();populateMatches();
+ await renderPlayers();await renderMatches();await renderTeams();await renderCash();renderStats();populateMatches();await loadMatchHistory('history-games-admin');
 }
 $('player-form').addEventListener('submit',async e=>{
  e.preventDefault();
@@ -602,6 +604,31 @@ $('cash-form').addEventListener('submit',async e=>{
 });
 function renderStats(){const m=matches.find(x=>x.status==='scheduled'&&new Date(x.starts_at)>=new Date());$('next-game').textContent=m?.title||'—';$('next-date').textContent=m?dt(m.starts_at):'Nenhum jogo futuro';if(!m){$('confirmed').textContent='0';return}db.from('attendance').select('id',{count:'exact',head:true}).eq('match_id',m.id).eq('status','confirmed').then(r=>{if(!r.error)$('confirmed').textContent=String(r.count||0)})}
 async function loadPublicBalance(){const {data,error}=await db.rpc('get_group_balance',{p_group_id:cfg.GROUP_ID});if(error){msg('balance-message','Não foi possível consultar o saldo: '+error.message,true);return}$('public-balance-value').textContent=money(data)}
+async function loadMatchHistory(containerId){
+ const el=$(containerId);if(!el||!db)return;
+ el.innerHTML='<div class="empty">Carregando histórico…</div>';
+ const {data,error}=await db.rpc('get_public_match_history',{p_group_id:cfg.GROUP_ID});
+ if(error){
+  el.innerHTML=`<div class="empty history-error">Não foi possível carregar o histórico. Confirme se a migração <b>013_public_match_history.sql</b> foi executada no Supabase.<small>${esc(error.message)}</small></div>`;
+  return;
+ }
+ const games=Array.isArray(data)?data:[];
+ if(!games.length){el.innerHTML='<div class="empty">Ainda não há peladas encerradas com histórico disponível.</div>';return;}
+ el.innerHTML=games.map(game=>{
+  const teams=Array.isArray(game.teams)?game.teams:[];
+  const allScoresKnown=teams.length===2&&teams.every(team=>team.score!==null&&team.score!==undefined);
+  const scoreline=allScoresKnown?`<div class="history-scoreline"><span>${esc(teams[0].name||'Time A')}</span><strong>${esc(teams[0].score)} <i>×</i> ${esc(teams[1].score)}</strong><span>${esc(teams[1].name||'Time B')}</span></div>`:'';
+  const teamsMarkup=teams.length?teams.map(team=>{
+   const players=Array.isArray(team.players)?team.players:[];
+   const roster=players.length?`<ul>${players.map(name=>`<li>${esc(name)}</li>`).join('')}</ul>`:'<p class="muted small">Nenhum jogador registrado nesta equipe.</p>';
+   const score=team.score===null||team.score===undefined?'—':esc(team.score);
+   return `<article class="history-team"><div class="history-team-heading"><h3>${esc(team.name||'Time')}</h3><span class="history-team-score">${score} <small>gols</small></span></div>${roster}</article>`;
+  }).join(''):'<div class="empty">A divisão dos times não foi salva para esta pelada.</div>';
+  const when=dt(game.starts_at);
+  const location=game.location?` · ${esc(game.location)}`:'';
+  return `<article class="history-game"><div class="history-game-heading"><div><p class="eyebrow">PELADEIRA ENCERRADA</p><h2>${esc(game.title||'Pelada sem nome')}</h2><small>${when}${location}</small></div><span class="pill history-closed-pill">Encerrada</span></div>${scoreline}<div class="history-teams">${teamsMarkup}</div></article>`;
+ }).join('');
+}
 function fillRosterList(id, players, emptyText){
  const el=$(id);el.innerHTML='';
  if(!players.length){const li=document.createElement('li');li.className='muted empty-list-item';li.textContent=emptyText;el.appendChild(li);return}

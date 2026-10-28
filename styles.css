@@ -92,3 +92,45 @@
  .team-move-control{width:100%;white-space:normal}
  .team-move-control select{flex:1;max-width:none}
 }
+
+
+/* Histórico público e do painel: jogos encerrados, placares e escalações salvas */
+.header-links{display:flex;align-items:center;justify-content:flex-end;gap:4px;flex-wrap:wrap}
+.history-page{max-width:1040px;margin:26px auto}
+.history-page-header,.history-game-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.history-page-header{margin-bottom:22px}
+.history-page-header .muted{margin:8px 0 0}
+.history-back{display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;text-decoration:none;padding:10px 14px;border:1px solid #d8e2da;border-radius:9px;background:#edf2ee;color:#24372a;font-size:.9rem;font-weight:750}
+.history-list{display:flex;flex-direction:column;gap:14px}
+.history-game{background:white;border:1px solid var(--line);border-radius:14px;padding:18px;box-shadow:0 6px 24px #163b2010;min-width:0}
+.history-game-heading{padding-bottom:14px;border-bottom:1px solid var(--line)}
+.history-game-heading .eyebrow{margin-bottom:4px}
+.history-game-heading h2{margin:0 0 4px;overflow-wrap:anywhere}
+.history-game-heading small{font-size:.87rem}
+.history-closed-pill{margin-top:3px;white-space:nowrap}
+.history-scoreline{display:flex;align-items:center;justify-content:center;gap:16px;flex-wrap:wrap;padding:15px 8px;margin:12px 0;background:#f0fdf4;border:1px solid #dcfce7;border-radius:12px;color:#14532d;font-weight:750;text-align:center}
+.history-scoreline strong{font-size:1.65rem;white-space:nowrap;letter-spacing:.02em}
+.history-scoreline strong i{font-style:normal;font-size:1rem;opacity:.75;padding:0 5px}
+.history-scoreline>span{max-width:35%;overflow-wrap:anywhere}
+.history-teams{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:12px;margin-top:14px}
+.history-team{min-width:0;background:#f8faf8;border:1px solid var(--line);border-radius:12px;padding:14px}
+.history-team-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-bottom:9px;border-bottom:1px solid var(--line)}
+.history-team-heading h3{font-size:1.05rem;overflow-wrap:anywhere}
+.history-team-score{display:inline-flex;align-items:baseline;gap:4px;color:var(--green);font-size:1.35rem;font-weight:850;white-space:nowrap}
+.history-team-score small{display:inline;font-size:.72rem;font-weight:700}
+.history-team ul{padding-left:22px;margin:9px 0 0}
+.history-team li{padding:3px 0;overflow-wrap:anywhere}
+.history-error{overflow-wrap:anywhere}
+.history-error small{display:block;margin-top:8px}
+@media(max-width:700px){
+ .header-links{gap:2px}
+ .header-link{margin-right:6px;font-size:.76rem}
+ .history-page{margin:8px auto}
+ .history-page-header{flex-direction:column;align-items:stretch}
+ .history-back{align-self:flex-start}
+ .history-game{padding:14px}
+ .history-game-heading{gap:8px}
+ .history-scoreline{gap:8px;padding:12px 6px}
+ .history-scoreline>span{max-width:100%;font-size:.9rem}
+ .history-scoreline strong{font-size:1.4rem}
+}
