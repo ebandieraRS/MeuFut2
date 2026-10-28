@@ -66,3 +66,29 @@
 
 .goalkeeper-tag{display:inline-block;margin:2px 4px;padding:2px 8px;border-radius:999px;background:#dbeafe;color:#1d4ed8;font-size:.72rem;font-weight:800;white-space:nowrap}
 .team-title-row{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+
+
+/* Ajuste manual da divisão dos times */
+.team-division-block{grid-column:1/-1;min-width:0}
+.team-division-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:2px 0 12px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+.team-division-heading h3{font-size:1.08rem}
+.team-division-heading .pill{margin-top:0}
+.team-division-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 14px;margin-bottom:12px;background:#f8faf8;border:1px solid var(--line);border-radius:12px}
+.team-division-actions p{margin:0;flex:1;min-width:220px}
+.team-division-actions>div{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.team-unsaved{background:#fef3c7;color:#92400e}
+.team-roster{padding-left:20px;margin:8px 0 0}
+.team-player-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid #edf1ed}
+.team-player-row:last-child{border-bottom:0}
+.team-player-row>div{min-width:0;overflow-wrap:anywhere}
+.team-move-control{display:flex;align-items:center;gap:8px;min-width:150px;font-size:.8rem;font-weight:700;white-space:nowrap}
+.team-move-control select{width:auto;min-width:110px;max-width:160px;margin:0;padding:7px 9px;min-height:38px;font-size:.88rem}
+.team-player-row .muted.small{display:inline;font-size:.76rem}
+@media(max-width:700px){
+ .team-division-actions{align-items:stretch;flex-direction:column}
+ .team-division-actions>div{width:100%}
+ .team-division-actions button{flex:1}
+ .team-player-row{align-items:flex-start;flex-direction:column;gap:4px}
+ .team-move-control{width:100%;white-space:normal}
+ .team-move-control select{flex:1;max-width:none}
+}

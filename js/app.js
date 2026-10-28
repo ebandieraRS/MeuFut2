@@ -5,6 +5,7 @@ const dt=v=>v?new Date(v).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'s
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const show=(id,on=true)=>$(id).classList.toggle('hidden',!on);
 let db, session, admin=false, members=[], matches=[], publicPlayers=[], publicToken=null, publicGroupToken=null, publicGroupMatches=[], activePublicMatchId=null;
+let teamDrafts=new Map(), dirtyTeamDivisions=new Set();
 const cfgReady=cfg&&cfg.SUPABASE_URL?.startsWith('https://')&&!cfg.SUPABASE_URL.includes('SEU-PROJETO')&&cfg.SUPABASE_PUBLISHABLE_KEY&&!cfg.SUPABASE_PUBLISHABLE_KEY.includes('SUA_CHAVE')&&cfg.GROUP_ID&&!cfg.GROUP_ID.includes('UUID-');
 function toast(s){$('toast').textContent=s;show('toast');setTimeout(()=>show('toast',false),3500)}
 function msg(id,s,error=false){$(id).textContent=s;$(id).classList.toggle('error',error)}
@@ -34,6 +35,7 @@ function loadApp() {
 }
 async function loadAppInternal(){
  if(!session)return;
+ teamDrafts.clear();dirtyTeamDivisions.clear();
  const userId = session.user.id;
  const {data:me,error}=await db.from('group_members').select('id,role').eq('group_id',cfg.GROUP_ID).eq('user_id',userId).eq('active',true).maybeSingle();
  if(error)throw error;if(!me){await db.auth.signOut();throw new Error('Esta conta não está cadastrada como integrante ativo do grupo.')}
@@ -342,13 +344,19 @@ $('draw-form').addEventListener('submit',async e=>{
  const teamCount=Number($('team-count').value);
  if(!matchId)return toast('Crie um jogo primeiro.');
  const {data:attendance,error}=await db.from('attendance')
-  .select('member_id,group_members(id,display_name,skill_level,is_goalkeeper,is_line_goalkeeper)')
+  .select('member_id,group_members(id,group_id,display_name,skill_level,active,is_goalkeeper,is_line_goalkeeper)')
   .eq('match_id',matchId).eq('status','confirmed');
  if(error)return toast('Não foi possível carregar os confirmados: '+error.message);
- const players=Array.from(new Map((attendance||[])
-  .map(row=>row.group_members).filter(Boolean).map(player=>[player.id,player])).values())
+ const attendanceRows=attendance||[];
+ const inactiveConfirmed=attendanceRows.filter(row=>row.group_members && row.group_members.active===false).length;
+ const players=Array.from(new Map(attendanceRows
+  .filter(row=>row.group_members && row.group_members.active===true && row.group_members.id===row.member_id && row.group_members.group_id===cfg.GROUP_ID)
+  .map(row=>row.group_members).map(player=>[player.id,player])).values())
   .map(player=>({...player,skill_level:Number(player.skill_level)||3}));
- if(players.length<teamCount)return toast('Não há jogadores suficientes para essa quantidade de times.');
+ if(players.length<teamCount){
+  const extra=inactiveConfirmed?' Há '+inactiveConfirmed+' confirmado(s) desativado(s), que foram ignorados no sorteio.':'';
+  return toast('Não há jogadores ativos suficientes para essa quantidade de times.'+extra);
+ }
 
  // Prioridade: goleiros cadastrados como goleiro. Só usamos goleiro linha para
  // preencher vagas de goleiro que continuem faltando.
@@ -396,32 +404,121 @@ $('draw-form').addEventListener('submit',async e=>{
  }));
  const {error:saveError}=await db.rpc('save_balanced_teams',{p_match_id:matchId,p_teams:payload});
  if(saveError)return toast('Não foi possível salvar os times: '+saveError.message);
+ teamDrafts.delete(matchId);dirtyTeamDivisions.delete(matchId);
  await renderTeams();
  const assignedCount=teams.filter(team=>team.goalkeeper_member_id!==null).length;
  const keeperSummary=assignedCount===teamCount
   ? 'Todos os times têm goleiro designado.'
   : `${assignedCount} de ${teamCount} times têm goleiro designado; os demais ficaram sem goleiro por falta de jogadores elegíveis.`;
- toast('Times sorteados. '+keeperSummary);
+ const skippedNote=inactiveConfirmed?` ${inactiveConfirmed} confirmado(s) desativado(s) ficaram fora do sorteio.`:'';
+ toast('Times sorteados. '+keeperSummary+skippedNote);
 });
 async function renderTeams(){
  const el=$('teams');el.innerHTML='';
+ let savedDivisionCount=0;
  for(const match of matches){
-  const {data:teamRows,error}=await db.from('teams').select('id,name,score').eq('match_id',match.id).order('name');
-  if(error)throw error;
-  for(const team of teamRows||[]){
-   const {data:players,error:playersError}=await db.from('team_players')
-    .select('skill_level_at_draw,is_assigned_goalkeeper,group_members(display_name)')
-    .eq('team_id',team.id);
-   if(playersError)throw playersError;
-   const roster=players||[];
-   const total=roster.reduce((sum,p)=>sum+p.skill_level_at_draw,0);
-   roster.sort((a,b)=>Number(Boolean(b.is_assigned_goalkeeper))-Number(Boolean(a.is_assigned_goalkeeper)));
-   const card=document.createElement('article');card.className='team';
-   card.innerHTML=`<div class="team-title-row"><h3>${esc(team.name)}</h3><span class="pill">Nível total ${total}</span>${team.score!==null&&team.score!==undefined?`<span class="pill">Placar: ${team.score}</span>`:''}</div><small>${esc(match.title)} · ${dt(match.starts_at)} · ${matchStatusLabel(match.status)}</small><ul>${roster.map(p=>`<li>${esc(p.group_members?.display_name||'Jogador')} ${p.is_assigned_goalkeeper?'<span class="goalkeeper-tag">🧤 Goleiro deste time</span>':''} <span class="muted">(${p.skill_level_at_draw})</span></li>`).join('')}</ul>`;
-   el.appendChild(card);
+  let teams=teamDrafts.get(match.id);
+  if(!teams){
+   const {data:teamRows,error}=await db.from('teams').select('id,name,score').eq('match_id',match.id).order('name');
+   if(error)throw error;
+   teams=[];
+   for(const team of teamRows||[]){
+    const {data:players,error:playersError}=await db.from('team_players')
+     .select('member_id,skill_level_at_draw,is_assigned_goalkeeper,group_members(id,display_name,active,is_goalkeeper,is_line_goalkeeper)')
+     .eq('team_id',team.id);
+    if(playersError)throw playersError;
+    const roster=(players||[]).map(p=>({
+     id:p.member_id,
+     display_name:p.group_members?.display_name||'Jogador não encontrado',
+     active:p.group_members?.active===true,
+     is_goalkeeper:p.group_members?.is_goalkeeper===true,
+     is_line_goalkeeper:p.group_members?.is_line_goalkeeper===true,
+     skill_level_at_draw:Number(p.skill_level_at_draw)||0,
+     is_assigned_goalkeeper:p.is_assigned_goalkeeper===true
+    }));
+    const goalkeeper=roster.find(p=>p.is_assigned_goalkeeper);
+    teams.push({id:team.id,name:team.name,score:team.score,goalkeeper_member_id:goalkeeper?.id||null,players:roster});
+   }
+   teamDrafts.set(match.id,teams);
   }
+  if(!teams.length)continue;
+  savedDivisionCount+=teams.length;
+  const editable=admin&&match.status==='scheduled';
+  const isDirty=dirtyTeamDivisions.has(match.id);
+  const teamCards=teams.map(team=>{
+   const roster=[...team.players].sort((a,b)=>Number(b.id===team.goalkeeper_member_id)-Number(a.id===team.goalkeeper_member_id)||a.display_name.localeCompare(b.display_name,'pt-BR',{sensitivity:'base'}));
+   const total=roster.reduce((sum,p)=>sum+p.skill_level_at_draw,0);
+   const playerRows=roster.map(player=>{
+    const keeper=player.id===team.goalkeeper_member_id;
+    const inactiveNote=player.active?'':' <span class="muted small">(jogador desativado; mantido na divisão)</span>';
+    const mover=editable?`<label class="team-move-control">Mover para<select data-player-move="${esc(player.id)}" data-match-move="${esc(match.id)}" data-current-team="${esc(team.name)}" ${player.active?'':'disabled'}>${teams.map(target=>`<option value="${esc(target.name)}" ${target.name===team.name?'selected':''}>${esc(target.name)}</option>`).join('')}</select></label>`:'';
+    return `<li class="team-player-row"><div><span>${esc(player.display_name)}</span> ${keeper?'<span class="goalkeeper-tag">🧤 Goleiro deste time</span>':''} <span class="muted">(${player.skill_level_at_draw})</span>${inactiveNote}</div>${mover}</li>`;
+   }).join('');
+   return `<article class="team"><div class="team-title-row"><h3>${esc(team.name)}</h3><span class="pill">Nível total ${total}</span>${team.score!==null&&team.score!==undefined?`<span class="pill">Placar: ${team.score}</span>`:''}</div><small>${match.status==='scheduled'?'':matchStatusLabel(match.status)}</small><ul class="team-roster">${playerRows}</ul></article>`;
+  }).join('');
+  const controls=editable?`<div class="team-division-actions"><p class="muted small">Ajuste a divisão pelos seletores “Mover para”. Cada time precisa manter ao menos um jogador.</p><div><button class="primary" data-save-division="${esc(match.id)}" ${isDirty?'':'disabled'}>Salvar divisão ajustada</button> <button class="secondary" data-cancel-division="${esc(match.id)}" ${isDirty?'':'disabled'}>Descartar ajustes</button></div></div>`:'';
+  const block=document.createElement('section');
+  block.className='team-division-block';
+  block.innerHTML=`<div class="team-division-heading"><div><h3>${esc(match.title)}</h3><small>${dt(match.starts_at)} · ${matchStatusLabel(match.status)}</small></div>${isDirty?'<span class="pill team-unsaved">Alterações não salvas</span>':''}</div>${controls}<div class="team-grid">${teamCards}</div>`;
+  el.appendChild(block);
  }
- if(!el.children.length)el.innerHTML='<div class="empty">Nenhum time sorteado.</div>';
+ if(!savedDivisionCount)el.innerHTML='<div class="empty">Nenhum time sorteado.</div>';
+}
+
+$('teams').addEventListener('change',async e=>{
+ const select=e.target.closest('[data-player-move]');
+ if(!select)return;
+ if(!admin)return toast('Somente administradores podem ajustar a divisão.');
+ const matchId=select.dataset.matchMove,playerId=select.dataset.playerMove,targetName=select.value,currentName=select.dataset.currentTeam;
+ const match=matches.find(m=>m.id===matchId);
+ if(!match||match.status!=='scheduled')return toast('Somente peladas em aberto podem ter a divisão ajustada.');
+ const teams=teamDrafts.get(matchId)||[];
+ const source=teams.find(t=>t.name===currentName),target=teams.find(t=>t.name===targetName);
+ if(!source||!target||source===target){await renderTeams();return;}
+ if(source.players.length<=1){toast('Cada time precisa manter ao menos um jogador.');await renderTeams();return;}
+ const index=source.players.findIndex(p=>p.id===playerId);
+ if(index<0){await renderTeams();return;}
+ const [player]=source.players.splice(index,1);
+ if(source.goalkeeper_member_id===player.id)source.goalkeeper_member_id=null;
+ target.players.push(player);
+ if(!target.goalkeeper_member_id&&(player.is_goalkeeper||player.is_line_goalkeeper))target.goalkeeper_member_id=player.id;
+ dirtyTeamDivisions.add(matchId);
+ await renderTeams();
+});
+
+$('teams').addEventListener('click',async e=>{
+ const save=e.target.closest('[data-save-division]');
+ if(save){await saveManualDivision(save.dataset.saveDivision);return;}
+ const cancel=e.target.closest('[data-cancel-division]');
+ if(cancel){
+  const matchId=cancel.dataset.cancelDivision;
+  if(dirtyTeamDivisions.has(matchId)&&!confirm('Descartar todos os ajustes manuais desta divisão?'))return;
+  dirtyTeamDivisions.delete(matchId);teamDrafts.delete(matchId);await renderTeams();
+ }
+});
+
+async function saveManualDivision(matchId){
+ if(!admin)return toast('Somente administradores podem ajustar a divisão.');
+ const match=matches.find(m=>m.id===matchId);
+ if(!match||match.status!=='scheduled')return toast('Somente peladas em aberto podem ter a divisão ajustada.');
+ if(!dirtyTeamDivisions.has(matchId))return;
+ const teams=teamDrafts.get(matchId)||[];
+ if(teams.length<2)return toast('A divisão precisa ter pelo menos dois times.');
+ if(teams.some(team=>team.players.length===0))return toast('Cada time precisa ter ao menos um jogador.');
+ const playerIds=teams.flatMap(team=>team.players.map(player=>player.id));
+ if(new Set(playerIds).size!==playerIds.length)return toast('Um jogador não pode estar em dois times.');
+ const payload=teams.map(team=>({
+  name:team.name,
+  goalkeeper_member_id:team.goalkeeper_member_id,
+  players:team.players.map(player=>({member_id:player.id,skill_level:player.skill_level_at_draw}))
+ }));
+ const button=Array.from($('teams').querySelectorAll('[data-save-division]')).find(b=>b.dataset.saveDivision===matchId);
+ if(button)button.disabled=true;
+ const {error}=await db.rpc('save_balanced_teams',{p_match_id:matchId,p_teams:payload});
+ if(error){if(button)button.disabled=false;return toast('Não foi possível salvar a divisão ajustada: '+error.message);}
+ dirtyTeamDivisions.delete(matchId);teamDrafts.delete(matchId);
+ toast('Divisão manual salva. Ela será preservada ao encerrar a pelada.');
+ await loadApp();
 }
 function populateCashMembers(){
  const select=$('cash-member');
