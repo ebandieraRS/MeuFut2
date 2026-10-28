@@ -27,6 +27,24 @@ $('logout').addEventListener('click',async()=>{await db.auth.signOut();session=n
 $('refresh').addEventListener('click',()=>loadApp().catch(e=>toast(e.message)));
 document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.tabpage').forEach(x=>x.classList.toggle('hidden',x.id!=='tab-'+b.dataset.tab));if(b.dataset.tab==='history')loadMatchHistory('history-games-admin')}));
 $('refresh-history').addEventListener('click',()=>loadMatchHistory('history-games-admin'));
+// Return to the authenticated dashboard in-place when a valid session exists.
+// Public history is intentionally reachable without login, so only unauthenticated visitors
+// should be sent back to the root page (which displays the login form).
+const historyBack=$('history-back');
+if(historyBack)historyBack.addEventListener('click',async e=>{
+ e.preventDefault();
+ try{
+  const {data,error}=await db.auth.getSession();
+  if(error)throw error;
+  if(!data?.session){location.href='./';return;}
+  session=data.session;
+  show('public-history',false);
+  renderAuth();
+  await loadApp();
+ }catch(err){
+  toast('Não foi possível voltar ao painel: '+(err.message||'erro inesperado'));
+ }
+});
 // Prevent overlapping loads (e.g. form submit + Supabase SIGNED_IN event).
 let appLoadPromise = null;
 function loadApp() {
