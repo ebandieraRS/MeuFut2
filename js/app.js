@@ -51,7 +51,7 @@ async function loadAppInternal(){
    const aDate=new Date(a.starts_at).getTime(),bDate=new Date(b.starts_at).getTime();
    return a.status==='scheduled'?aDate-bDate:bDate-aDate;
   });
- await renderPlayers();await renderMatches();await renderTeams();await renderCash();renderStats();populateMatches();updateMatchTitlePreview();
+ await renderPlayers();await renderMatches();await renderTeams();await renderCash();renderStats();populateMatches();
 }
 $('player-form').addEventListener('submit',async e=>{
  e.preventDefault();
@@ -108,48 +108,27 @@ async function renderPlayers(){
  }));
  el.querySelectorAll('[data-disable]').forEach(x=>x.onclick=async()=>{if(!confirm('Desativar jogador?'))return;const {error}=await db.from('group_members').update({active:false}).eq('id',x.dataset.disable).eq('group_id',cfg.GROUP_ID);if(error)toast(error.message);else await loadApp();});
 }
-function nextMatchNumber(){
- const currentCount=matches.length;
- const highestNamedNumber=matches.reduce((max,match)=>{
-  const found=String(match.title||'').match(/^Jogo\s+#(\d+)\s+-/i);
-  return found?Math.max(max,Number(found[1])||0):max;
- },0);
- return Math.max(currentCount,highestNamedNumber)+1;
-}
-function generateMatchTitle(dateTimeValue){
- if(!dateTimeValue)return '';
- const date=new Date(dateTimeValue);
- if(Number.isNaN(date.getTime()))return '';
- const pad=n=>String(n).padStart(2,'0');
- return `Jogo #${nextMatchNumber()} - ${pad(date.getDate())}/${pad(date.getMonth()+1)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-function updateMatchTitlePreview(){
- const field=$('match-name');
- if(field)field.value=generateMatchTitle($('match-date').value);
-}
-$('match-date').addEventListener('input',updateMatchTitlePreview);
-$('match-date').addEventListener('change',updateMatchTitlePreview);
 $('match-form').addEventListener('submit',async e=>{
  e.preventDefault();
  if(!admin)return toast('Somente administradores podem criar peladas.');
+ const matchTitle=$('match-name').value.trim();
+ if(!matchTitle)return toast('Informe o nome da pelada.');
  const dateValue=$('match-date').value;
  const date=new Date(dateValue);
  if(!dateValue||Number.isNaN(date.getTime()))return toast('Informe uma data e hora válidas.');
- const generatedTitle=generateMatchTitle(dateValue);
- if(!generatedTitle)return toast('Não foi possível gerar o nome do jogo.');
  const {error}=await db.from('matches').insert({
   group_id:cfg.GROUP_ID,
-  title:generatedTitle,
+  title:matchTitle,
   starts_at:date.toISOString(),
   location:$('match-location').value.trim()||null,
   player_limit:+$('match-limit').value,
   status:'scheduled'
  });
  if(error)return toast(error.message);
- toast(`Criado: ${generatedTitle}`);
+ toast(`Pelada criada: ${matchTitle}`);
+ $('match-name').value='';
  $('match-date').value='';
  $('match-location').value='';
- $('match-name').value='';
  $('match-limit').value='20';
  await loadApp();
 });
@@ -237,13 +216,25 @@ async function closeMatchWithScore(matchId,editing=false){
  if(error)return toast('Não foi possível carregar a divisão salva: '+error.message);
  const teams=teamRows||[];
  if(teams.length<2)return toast('Ainda não há uma divisão de pelo menos dois times salva. Vá à aba Times e sorteie a divisão utilizada antes de encerrar a pelada.');
+ const rosterByTeam=new Map(teams.map(team=>[team.id,[]]));
+ const {data:rosterRows,error:rosterError}=await db.from('team_players')
+  .select('team_id,member_id,group_members(display_name)')
+  .in('team_id',teams.map(team=>team.id));
+ if(rosterError)return toast('Não foi possível carregar os jogadores dos times: '+rosterError.message);
+ for(const row of rosterRows||[]){
+  const names=rosterByTeam.get(row.team_id);
+  if(names)names.push(row.group_members?.display_name||'Jogador não encontrado');
+ }
+ for(const names of rosterByTeam.values())names.sort((a,b)=>a.localeCompare(b,'pt-BR',{sensitivity:'base'}));
  const actionText=editing?'corrigir o placar':'encerrar a pelada e salvar o placar';
  if(!confirm(`Deseja ${actionText} "${match.title}"?\n\nInforme os gols de cada time nas próximas janelas.${editing?' A divisão salva será mantida.':' A divisão atual ficará registrada no histórico e a pelada deixará de aceitar novas confirmações pelo link do grupo.'}`))return;
  const scores=[];
  for(const team of teams){
   let score=null;
+  const roster=rosterByTeam.get(team.id)||[];
+  const rosterText=roster.length?roster.map(name=>`• ${name}`).join('\n'):'(nenhum jogador encontrado)';
   while(score===null){
-   const raw=window.prompt(`Placar final — ${team.name}\nInforme os gols (número inteiro, zero ou maior):`,team.score===null||team.score===undefined?'0':String(team.score));
+   const raw=window.prompt(`Placar final — ${team.name}\n\nJogadores do time:\n${rosterText}\n\nInforme os gols (número inteiro, zero ou maior):`,team.score===null||team.score===undefined?'0':String(team.score));
    if(raw===null)return;
    const normalized=raw.trim();
    if(/^\d+$/.test(normalized)&&Number.isSafeInteger(Number(normalized))&&Number(normalized)<=2147483647){
