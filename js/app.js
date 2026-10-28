@@ -27,23 +27,31 @@ $('logout').addEventListener('click',async()=>{await db.auth.signOut();session=n
 $('refresh').addEventListener('click',()=>loadApp().catch(e=>toast(e.message)));
 document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.tabpage').forEach(x=>x.classList.toggle('hidden',x.id!=='tab-'+b.dataset.tab));if(b.dataset.tab==='history')loadMatchHistory('history-games-admin')}));
 $('refresh-history').addEventListener('click',()=>loadMatchHistory('history-games-admin'));
-// Return to the authenticated dashboard in-place when a valid session exists.
-// Public history is intentionally reachable without login, so only unauthenticated visitors
-// should be sent back to the root page (which displays the login form).
+// Back navigation: when history was opened from this app's dashboard, return to that
+// exact page instead of rebuilding the dashboard on the public-history route. This avoids
+// auth-session timing issues and preserves the already authenticated dashboard state.
 const historyBack=$('history-back');
-if(historyBack)historyBack.addEventListener('click',async e=>{
+if(historyBack)historyBack.addEventListener('click',e=>{
  e.preventDefault();
+ let cameFromDashboard=false;
  try{
-  const {data,error}=await db.auth.getSession();
-  if(error)throw error;
-  if(!data?.session){location.href='./';return;}
-  session=data.session;
-  show('public-history',false);
-  renderAuth();
-  await loadApp();
- }catch(err){
-  toast('Não foi possível voltar ao painel: '+(err.message||'erro inesperado'));
+  if(document.referrer){
+   const ref=new URL(document.referrer);
+   const currentPath=(location.pathname.replace(/\/+$/,'')||'/');
+   const refPath=(ref.pathname.replace(/\/+$/,'')||'/');
+   const refQuery=new URLSearchParams(ref.search);
+   const cameFromPublicRoute=['historico','grupo','attendance','caixa'].some(key=>refQuery.has(key));
+   cameFromDashboard=ref.origin===location.origin && refPath===currentPath && !cameFromPublicRoute;
+  }
+ }catch(_){/* Fall back to the main page below. */}
+ if(cameFromDashboard && history.length>1){
+  history.back();
+  return;
  }
+ // A direct visit/new tab has no previous dashboard to return to.
+ const fallback=new URL('./',location.href);
+ fallback.search='';fallback.hash='';
+ location.assign(fallback.href);
 });
 // Prevent overlapping loads (e.g. form submit + Supabase SIGNED_IN event).
 let appLoadPromise = null;
