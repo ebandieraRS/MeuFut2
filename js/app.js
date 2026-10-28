@@ -4,13 +4,14 @@ const money=c=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).
 const dt=v=>v?new Date(v).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'}):'—';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const show=(id,on=true)=>$(id).classList.toggle('hidden',!on);
-let db, session, admin=false, members=[], matches=[], publicPlayers=[], publicToken=null;
+let db, session, admin=false, members=[], matches=[], publicPlayers=[], publicToken=null, publicGroupToken=null, publicGroupMatches=[], activePublicMatchId=null;
 const cfgReady=cfg&&cfg.SUPABASE_URL?.startsWith('https://')&&!cfg.SUPABASE_URL.includes('SEU-PROJETO')&&cfg.SUPABASE_PUBLISHABLE_KEY&&!cfg.SUPABASE_PUBLISHABLE_KEY.includes('SUA_CHAVE')&&cfg.GROUP_ID&&!cfg.GROUP_ID.includes('UUID-');
 function toast(s){$('toast').textContent=s;show('toast');setTimeout(()=>show('toast',false),3500)}
 function msg(id,s,error=false){$(id).textContent=s;$(id).classList.toggle('error',error)}
 function setup(){if(!cfgReady||!window.supabase){show('setup');$('setup').textContent='Edite js/config.js com a URL, publishable key e UUID do grupo Supabase.';return false}db=window.supabase.createClient(cfg.SUPABASE_URL,cfg.SUPABASE_PUBLISHABLE_KEY);return true}
 async function init(){
  const q=new URLSearchParams(location.search);
+ if(q.has('grupo')){if(!setup())return;show('public-attendance');await loadGroupAttendance(q.get('grupo'));return}
  if(q.has('attendance')){if(!setup())return;show('public-attendance');await loadAttendance(q.get('attendance'));return}
  if(q.has('caixa')){if(!setup())return;show('public-balance');await loadPublicBalance();return}
  if(!setup()){show('login');return}
@@ -41,7 +42,7 @@ async function loadAppInternal(){
  const b=await db.from('matches').select('id,title,starts_at,location,player_limit,status').eq('group_id',cfg.GROUP_ID).order('starts_at');if(b.error)throw b.error;
  // Defensive deduplication by primary key. The database query itself should return unique IDs.
  matches=Array.from(new Map((b.data||[]).map(match=>[match.id,match])).values());
- await renderPlayers();await renderMatches();await renderTeams();await renderCash();renderStats();populateMatches();
+ await renderPlayers();await renderMatches();await renderTeams();await renderCash();renderStats();populateMatches();updateMatchTitlePreview();
 }
 $('player-form').addEventListener('submit',async e=>{
  e.preventDefault();
@@ -98,7 +99,51 @@ async function renderPlayers(){
  }));
  el.querySelectorAll('[data-disable]').forEach(x=>x.onclick=async()=>{if(!confirm('Desativar jogador?'))return;const {error}=await db.from('group_members').update({active:false}).eq('id',x.dataset.disable).eq('group_id',cfg.GROUP_ID);if(error)toast(error.message);else await loadApp();});
 }
-$('match-form').addEventListener('submit',async e=>{e.preventDefault();const date=new Date($('match-date').value);if(isNaN(date))return toast('Data inválida');const {error}=await db.from('matches').insert({group_id:cfg.GROUP_ID,title:$('match-name').value.trim(),starts_at:date.toISOString(),location:$('match-location').value.trim()||null,player_limit:+$('match-limit').value,status:'scheduled'});if(error)return toast(error.message);await loadApp()});
+function nextMatchNumber(){
+ const currentCount=matches.length;
+ const highestNamedNumber=matches.reduce((max,match)=>{
+  const found=String(match.title||'').match(/^Jogo\s+#(\d+)\s+-/i);
+  return found?Math.max(max,Number(found[1])||0):max;
+ },0);
+ return Math.max(currentCount,highestNamedNumber)+1;
+}
+function generateMatchTitle(dateTimeValue){
+ if(!dateTimeValue)return '';
+ const date=new Date(dateTimeValue);
+ if(Number.isNaN(date.getTime()))return '';
+ const pad=n=>String(n).padStart(2,'0');
+ return `Jogo #${nextMatchNumber()} - ${pad(date.getDate())}/${pad(date.getMonth()+1)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+function updateMatchTitlePreview(){
+ const field=$('match-name');
+ if(field)field.value=generateMatchTitle($('match-date').value);
+}
+$('match-date').addEventListener('input',updateMatchTitlePreview);
+$('match-date').addEventListener('change',updateMatchTitlePreview);
+$('match-form').addEventListener('submit',async e=>{
+ e.preventDefault();
+ if(!admin)return toast('Somente administradores podem criar peladas.');
+ const dateValue=$('match-date').value;
+ const date=new Date(dateValue);
+ if(!dateValue||Number.isNaN(date.getTime()))return toast('Informe uma data e hora válidas.');
+ const generatedTitle=generateMatchTitle(dateValue);
+ if(!generatedTitle)return toast('Não foi possível gerar o nome do jogo.');
+ const {error}=await db.from('matches').insert({
+  group_id:cfg.GROUP_ID,
+  title:generatedTitle,
+  starts_at:date.toISOString(),
+  location:$('match-location').value.trim()||null,
+  player_limit:+$('match-limit').value,
+  status:'scheduled'
+ });
+ if(error)return toast(error.message);
+ toast(`Criado: ${generatedTitle}`);
+ $('match-date').value='';
+ $('match-location').value='';
+ $('match-name').value='';
+ $('match-limit').value='20';
+ await loadApp();
+});
 async function renderMatches(){
  const el=$('matches');
  if(!matches.length){el.innerHTML='<div class="empty">Nenhum jogo criado.</div>';return}
@@ -124,7 +169,7 @@ async function renderMatches(){
   const listMarkup=(names,emptyText)=>names.length?`<ul>${names.map(name=>`<li>${esc(name)}</li>`).join('')}</ul>`:`<p class="muted small">${emptyText}</p>`;
   const d=document.createElement('article');
   d.className='item match-item';
-  d.innerHTML=`<div class="match-summary"><div><b>${esc(m.title)}</b><small>${dt(m.starts_at)}${m.location?' · '+esc(m.location):''}</small><span class="pill">${count}${m.player_limit?' / '+m.player_limit:''} confirmados</span></div>${admin?`<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="secondary" data-links="${m.id}">Gerar link da pelada</button><button class="secondary" data-delete-match="${m.id}" style="border-color:#ef4444;color:#b91c1c">Excluir pelada</button></div>`:''}</div>
+  d.innerHTML=`<div class="match-summary"><div><b>${esc(m.title)}</b><small>${dt(m.starts_at)}${m.location?' · '+esc(m.location):''}</small><span class="pill">${count}${m.player_limit?' / '+m.player_limit:''} confirmados</span></div>${admin?`<button class="secondary" data-delete-match="${m.id}" style="border-color:#ef4444;color:#b91c1c">Excluir pelada</button>`:''}</div>
     <details class="attendance-details"><summary>Ver lista de presença · ${count} confirmados, ${buckets.pending.length} pendentes</summary>
       <div class="roster-counts"><span class="status-chip status-confirmed">${count} confirmados</span><span class="status-chip status-declined">${buckets.declined.length} não vão</span><span class="status-chip status-pending">${buckets.pending.length} pendentes</span><span class="status-chip status-waitlist">${buckets.waitlist.length} em espera</span></div>
       <div class="attendance-columns">
@@ -154,7 +199,18 @@ async function deleteMatch(matchId){
  toast('Pelada excluída.');
  await loadApp();
 }
-async function makeLinks(matchId){if(!confirm('Gerar o link único desta pelada? Se já existir um link, ele será substituído e o anterior deixará de funcionar.'))return;const {data,error}=await db.rpc('create_match_attendance_link',{p_match_id:matchId});if(error)return toast('Não foi possível gerar o link: '+error.message);const url=location.origin+location.pathname+'?attendance='+encodeURIComponent(data);try{await navigator.clipboard.writeText(url);alert('Link único da pelada copiado! Compartilhe este mesmo link com a turma.\n\n'+url+'\n\nAtenção: se gerar outro link para esta pelada, o anterior será invalidado.')}catch{prompt('Copie o link único da pelada e compartilhe com a turma:',url)}}
+$('group-attendance-link').addEventListener('click',makeGroupAttendanceLink);
+async function makeGroupAttendanceLink(){
+ if(!admin)return toast('Somente administradores podem gerar o link do grupo.');
+ if(!confirm('Gerar ou renovar o link único do grupo? Se já existir um link, o anterior deixará de funcionar. Gere novamente somente se precisar substituir o link compartilhado.'))return;
+ const {data,error}=await db.rpc('create_group_attendance_link',{p_group_id:cfg.GROUP_ID});
+ if(error)return toast('Não foi possível gerar o link do grupo: '+error.message);
+ const url=location.origin+location.pathname+'?grupo='+encodeURIComponent(data);
+ try{
+  await navigator.clipboard.writeText(url);
+  alert('Link único do grupo copiado! Compartilhe este mesmo link com a turma para confirmar qualquer pelada agendada.\n\n'+url+'\n\nEste link permanece válido até ser renovado.');
+ }catch{prompt('Copie o link único do grupo e compartilhe com a turma:',url)}
+}
 function populateMatches(){
  const s=$('draw-match'),old=s.value;
  s.innerHTML=matches.filter(m=>m.status==='scheduled').map(m=>`<option value="${m.id}">${esc(m.title)} — ${dt(m.starts_at)}</option>`).join('');
@@ -407,9 +463,11 @@ function buildAttendanceClipboardText(){
   const date=new Date(startsAt);
   if(!Number.isNaN(date.getTime()))dayMonth=`${String(date.getDate()).padStart(2,'0')}/${String(date.getMonth()+1).padStart(2,'0')}`;
  }
- const confirmationLink=publicToken
-  ? `${location.origin}${location.pathname}?attendance=${encodeURIComponent(publicToken)}`
-  : '';
+ const confirmationLink=publicGroupToken
+  ? `${location.origin}${location.pathname}?grupo=${encodeURIComponent(publicGroupToken)}`
+  : publicToken
+   ? `${location.origin}${location.pathname}?attendance=${encodeURIComponent(publicToken)}`
+   : '';
  const linkLine=confirmationLink?`Link para confirmar presença: ${confirmationLink}`:'';
  return [`Lista Jogo${dayMonth?' '+dayMonth:''}`,'',linkLine,'',
   ...confirmed.map((name,index)=>`${index+1}. ${name}`),
@@ -456,6 +514,9 @@ function renderPublicRoster(){
 }
 async function loadAttendance(token,preserveMemberId=null){
  publicToken=token;
+ publicGroupToken=null;
+ activePublicMatchId=null;
+ show('public-match-wrap',false);
  $('yes').disabled=$('no').disabled=true;
  $('public-member-select').disabled=true;
  const {data,error}=await db.rpc('get_match_attendance_link_info',{p_token:token});
@@ -487,6 +548,77 @@ async function loadAttendance(token,preserveMemberId=null){
  renderSelectedAttendanceState();
  renderPublicRoster();
 }
+async function loadGroupAttendance(token,preserveMatchId=null,preserveMemberId=null){
+ publicGroupToken=token;
+ publicToken=null;
+ show('public-match-wrap',true);
+ $('yes').disabled=$('no').disabled=true;
+ $('public-match-select').disabled=true;
+ $('public-member-select').disabled=true;
+ const {data,error}=await db.rpc('get_group_attendance_matches',{p_token:token});
+ if(error){
+  $('public-title').textContent='Não foi possível carregar as peladas';
+  $('public-meta').textContent='';
+  msg('public-message','Erro ao carregar o link do grupo: '+error.message,true);
+  show('public-roster-summary',false);
+  return;
+ }
+ publicGroupMatches=Array.from(new Map((data||[]).map(match=>[match.match_id,match])).values());
+ if(!publicGroupMatches.length){
+  activePublicMatchId=null;
+  $('public-title').textContent='Nenhuma pelada disponível';
+  $('public-meta').textContent='';
+  $('public-match-select').innerHTML='<option value="">Nenhuma pelada agendada</option>';
+  $('public-member-select').innerHTML='<option value="">Nenhum jogador disponível</option>';
+  $('public-match-select').disabled=true;
+  $('public-member-select').disabled=true;
+  $('yes').disabled=$('no').disabled=true;
+  $('add-guest-button').disabled=true;
+  show('guest-registration',false);
+  show('public-roster-summary',false);
+  msg('public-message','Não há peladas agendadas neste grupo ou o link não é mais válido. Peça ao administrador para verificar.',true);
+  return;
+ }
+ const select=$('public-match-select');
+ const previous=preserveMatchId||select.value;
+ select.innerHTML=publicGroupMatches.map(match=>`<option value="${match.match_id}">${esc(match.match_title)} — ${dt(match.starts_at)}</option>`).join('');
+ activePublicMatchId=publicGroupMatches.some(m=>m.match_id===previous)?previous:publicGroupMatches[0].match_id;
+ select.value=activePublicMatchId;
+ select.disabled=false;
+ select.onchange=async()=>{
+  const memberId=$('public-member-select').value;
+  activePublicMatchId=select.value;
+  try{await loadGroupMatchAttendance(token,activePublicMatchId,memberId)}catch(err){msg('public-message','Não foi possível carregar a pelada: '+err.message,true)}
+ };
+ await loadGroupMatchAttendance(token,activePublicMatchId,preserveMemberId);
+}
+async function loadGroupMatchAttendance(token,matchId,preserveMemberId=null){
+ publicGroupToken=token;
+ publicToken=null;
+ activePublicMatchId=matchId;
+ const match=publicGroupMatches.find(m=>m.match_id===matchId);
+ if(!match){msg('public-message','Selecione uma pelada disponível.',true);return}
+ $('yes').disabled=$('no').disabled=true;
+ $('public-member-select').disabled=true;
+ const {data,error}=await db.rpc('get_group_match_attendance_info',{p_token:token,p_match_id:matchId});
+ if(error){msg('public-message','Não foi possível carregar a lista de jogadores: '+error.message,true);return}
+ publicPlayers=(data||[]).map(player=>({...match,...player,match_id:match.match_id,match_title:match.match_title,starts_at:match.starts_at,location:match.location,player_limit:match.player_limit}));
+ show('guest-registration',true);
+ $('add-guest-button').disabled=false;
+ $('public-title').textContent=match.match_title;
+ $('public-meta').textContent=dt(match.starts_at)+(match.location?' · '+match.location:'');
+ const select=$('public-member-select');
+ const previous=preserveMemberId||select.value;
+ const alphabeticPlayers=[...publicPlayers].sort((a,b)=>String(a.player_name||'').localeCompare(String(b.player_name||''),'pt-BR',{sensitivity:'base'}));
+ select.innerHTML='<option value="">Selecione teu nome…</option>'+alphabeticPlayers.map(p=>`<option value="${p.member_id}">${esc(p.player_name)}</option>`).join('');
+ if(previous&&publicPlayers.some(p=>p.member_id===previous))select.value=previous;else select.value='';
+ select.disabled=false;
+ select.onchange=renderSelectedAttendanceState;
+ $('yes').onclick=()=>respond(token,select.value,'confirmed');
+ $('no').onclick=()=>respond(token,select.value,'declined');
+ renderSelectedAttendanceState();
+ renderPublicRoster();
+}
 function renderSelectedAttendanceState(){
  const memberId=$('public-member-select').value;
  const player=publicPlayers.find(p=>p.member_id===memberId);
@@ -497,49 +629,59 @@ function renderSelectedAttendanceState(){
  msg('public-message',`Situação registrada para ${player.player_name}: ${labels[player.attendance_status]||player.attendance_status}.`);
 }
 $('public-refresh-roster').addEventListener('click',async()=>{
- if(!publicToken)return;
+ if(!publicToken&&!publicGroupToken)return;
  const memberId=$('public-member-select').value;
  $('public-refresh-roster').disabled=true;
- try{await loadAttendance(publicToken,memberId)}catch(e){msg('public-message','Não foi possível atualizar a lista: '+e.message,true)}
+ try{if(publicGroupToken)await loadGroupMatchAttendance(publicGroupToken,activePublicMatchId,memberId);else await loadAttendance(publicToken,memberId)}catch(e){msg('public-message','Não foi possível atualizar a lista: '+e.message,true)}
  finally{$('public-refresh-roster').disabled=false}
 });
 async function respond(token,memberId,status){
  if(!memberId){msg('public-message','Escolhe teu nome primeiro.',true);return}
  $('yes').disabled=$('no').disabled=true;
- const {error}=await db.rpc('respond_to_match_attendance',{p_token:token,p_member_id:memberId,p_status:status});
+ let error=null;
+ const matchId=publicGroupToken?activePublicMatchId:null;
+ if(publicGroupToken){
+  const result=await db.rpc('respond_to_group_match_attendance',{p_token:token,p_match_id:matchId,p_member_id:memberId,p_status:status});
+  error=result.error;
+ }else{
+  const result=await db.rpc('respond_to_match_attendance',{p_token:token,p_member_id:memberId,p_status:status});
+  error=result.error;
+ }
  if(error){msg('public-message',error.message,true);renderSelectedAttendanceState();return}
- await loadAttendance(token,memberId);
+ if(publicGroupToken)await loadGroupMatchAttendance(publicGroupToken,matchId,memberId);
+ else await loadAttendance(token,memberId);
  const player=publicPlayers.find(p=>p.member_id===memberId);
- const responseMessage=player?.attendance_status==='waitlist'
-  ?'A pelada está lotada. Você entrou na lista de espera.'
-  :status==='confirmed'?'Presença confirmada! ⚽':'Ausência registrada.';
+ const responseMessage=player?.attendance_status==='waitlist'?'A pelada está lotada. Você entrou na lista de espera.':status==='confirmed'?'Presença confirmada! ⚽':'Ausência registrada.';
  msg('public-message',responseMessage);
  const copied=await copyAttendanceListToClipboard();
- if(copied){
-  msg('public-message',responseMessage+' Lista atualizada copiada para a área de transferência.');
- }else{
-  msg('public-message',responseMessage+' Se a cópia automática não funcionou, a lista ficou disponível na janela para copiar manualmente.');
- }
+ if(copied)msg('public-message',responseMessage+' Lista atualizada copiada para a área de transferência.');
+ else msg('public-message',responseMessage+' Se a cópia automática não funcionou, a lista ficou disponível na janela para copiar manualmente.');
 }
 
 // A guest is created by a tightly-scoped server-side RPC using the match link token.
 // The database sets skill_level=3 and records attendance in the same transaction.
 $('guest-form').addEventListener('submit',async e=>{
  e.preventDefault();
- if(!publicToken)return;
+ if(!publicToken&&!publicGroupToken)return;
  const name=$('guest-name').value.trim().replace(/\s+/g,' ');
  if(name.length<2||name.length>80){msg('guest-message','Informe um nome entre 2 e 80 caracteres.',true);return;}
  const button=$('add-guest-button');
  button.disabled=true;
  msg('guest-message','Cadastrando convidado…');
  try{
-  const {data,error}=await db.rpc('add_guest_to_match',{p_token:publicToken,p_player_name:name});
+  let data,error;
+  if(publicGroupToken){
+   ({data,error}=await db.rpc('add_guest_to_group_match',{p_token:publicGroupToken,p_match_id:activePublicMatchId,p_player_name:name}));
+  }else{
+   ({data,error}=await db.rpc('add_guest_to_match',{p_token:publicToken,p_player_name:name}));
+  }
   if(error){msg('guest-message',error.message||'Não foi possível cadastrar o convidado.',true);return;}
   $('guest-name').value='';
-  await loadAttendance(publicToken,data);
+  if(publicGroupToken)await loadGroupMatchAttendance(publicGroupToken,activePublicMatchId,data);
+  else await loadAttendance(publicToken,data);
   const added=publicPlayers.find(p=>p.member_id===data);
-  if(added?.attendance_status==='waitlist')msg('guest-message',`${added.player_name} foi cadastrado, mas a pelada está lotada e entrou na lista de espera.`);
-  else msg('guest-message',`${added?.player_name||name} foi cadastrado e teve sua presença confirmada! ⚽`);
+  if(added?.attendance_status==='waitlist')msg('guest-message',`${added.player_name} foi cadastrado como jogador nível 3, mas a pelada está lotada e entrou na lista de espera.`);
+  else msg('guest-message',`${added?.player_name||name} foi cadastrado como jogador nível 3 e presença confirmada! ⚽`);
  }catch(err){msg('guest-message',err.message||'Ocorreu um erro ao cadastrar o convidado.',true)}
  finally{button.disabled=false;}
 });
