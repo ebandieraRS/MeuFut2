@@ -27,31 +27,11 @@ $('logout').addEventListener('click',async()=>{await db.auth.signOut();session=n
 $('refresh').addEventListener('click',()=>loadApp().catch(e=>toast(e.message)));
 document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.tabpage').forEach(x=>x.classList.toggle('hidden',x.id!=='tab-'+b.dataset.tab));if(b.dataset.tab==='history')loadMatchHistory('history-games-admin')}));
 $('refresh-history').addEventListener('click',()=>loadMatchHistory('history-games-admin'));
-// Back navigation: when history was opened from this app's dashboard, return to that
-// exact page instead of rebuilding the dashboard on the public-history route. This avoids
-// auth-session timing issues and preserves the already authenticated dashboard state.
+// Back button intentionally behaves exactly like the browser's Back action.
 const historyBack=$('history-back');
 if(historyBack)historyBack.addEventListener('click',e=>{
  e.preventDefault();
- let cameFromDashboard=false;
- try{
-  if(document.referrer){
-   const ref=new URL(document.referrer);
-   const currentPath=(location.pathname.replace(/\/+$/,'')||'/');
-   const refPath=(ref.pathname.replace(/\/+$/,'')||'/');
-   const refQuery=new URLSearchParams(ref.search);
-   const cameFromPublicRoute=['historico','grupo','attendance','caixa'].some(key=>refQuery.has(key));
-   cameFromDashboard=ref.origin===location.origin && refPath===currentPath && !cameFromPublicRoute;
-  }
- }catch(_){/* Fall back to the main page below. */}
- if(cameFromDashboard && history.length>1){
-  history.back();
-  return;
- }
- // A direct visit/new tab has no previous dashboard to return to.
- const fallback=new URL('./',location.href);
- fallback.search='';fallback.hash='';
- location.assign(fallback.href);
+ window.history.back();
 });
 // Prevent overlapping loads (e.g. form submit + Supabase SIGNED_IN event).
 let appLoadPromise = null;
