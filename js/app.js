@@ -41,7 +41,7 @@ async function loadAppInternal(){
  const b=await db.from('matches').select('id,title,starts_at,location,player_limit,status').eq('group_id',cfg.GROUP_ID).order('starts_at');if(b.error)throw b.error;
  // Defensive deduplication by primary key. The database query itself should return unique IDs.
  matches=Array.from(new Map((b.data||[]).map(match=>[match.id,match])).values());
- await renderPlayers();await renderMatches();await renderTeams();await renderCash();renderStats();populateMatches();updateMatchTitlePreview();
+ await renderPlayers();await renderMatches();await renderTeams();await renderCash();renderStats();populateMatches();
 }
 $('player-form').addEventListener('submit',async e=>{
  e.preventDefault();
@@ -98,51 +98,7 @@ async function renderPlayers(){
  }));
  el.querySelectorAll('[data-disable]').forEach(x=>x.onclick=async()=>{if(!confirm('Desativar jogador?'))return;const {error}=await db.from('group_members').update({active:false}).eq('id',x.dataset.disable).eq('group_id',cfg.GROUP_ID);if(error)toast(error.message);else await loadApp();});
 }
-function nextMatchNumber(){
- const currentCount=matches.length;
- const highestNamedNumber=matches.reduce((max,match)=>{
-  const found=String(match.title||'').match(/^Jogo\s+#(\d+)\s+-/i);
-  return found?Math.max(max,Number(found[1])||0):max;
- },0);
- return Math.max(currentCount,highestNamedNumber)+1;
-}
-function generateMatchTitle(dateTimeValue){
- if(!dateTimeValue)return '';
- const date=new Date(dateTimeValue);
- if(Number.isNaN(date.getTime()))return '';
- const pad=n=>String(n).padStart(2,'0');
- return `Jogo #${nextMatchNumber()} - ${pad(date.getDate())}/${pad(date.getMonth()+1)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-function updateMatchTitlePreview(){
- const field=$('match-name');
- if(field)field.value=generateMatchTitle($('match-date').value);
-}
-$('match-date').addEventListener('input',updateMatchTitlePreview);
-$('match-date').addEventListener('change',updateMatchTitlePreview);
-$('match-form').addEventListener('submit',async e=>{
- e.preventDefault();
- if(!admin)return toast('Somente administradores podem criar peladas.');
- const dateValue=$('match-date').value;
- const date=new Date(dateValue);
- if(!dateValue||Number.isNaN(date.getTime()))return toast('Informe uma data e hora válidas.');
- const generatedTitle=generateMatchTitle(dateValue);
- if(!generatedTitle)return toast('Não foi possível gerar o nome do jogo.');
- const {error}=await db.from('matches').insert({
-  group_id:cfg.GROUP_ID,
-  title:generatedTitle,
-  starts_at:date.toISOString(),
-  location:$('match-location').value.trim()||null,
-  player_limit:+$('match-limit').value,
-  status:'scheduled'
- });
- if(error)return toast(error.message);
- toast(`Criado: ${generatedTitle}`);
- $('match-date').value='';
- $('match-location').value='';
- $('match-name').value='';
- $('match-limit').value='20';
- await loadApp();
-});
+$('match-form').addEventListener('submit',async e=>{e.preventDefault();const date=new Date($('match-date').value);if(isNaN(date))return toast('Data inválida');const {error}=await db.from('matches').insert({group_id:cfg.GROUP_ID,title:$('match-name').value.trim(),starts_at:date.toISOString(),location:$('match-location').value.trim()||null,player_limit:+$('match-limit').value,status:'scheduled'});if(error)return toast(error.message);await loadApp()});
 async function renderMatches(){
  const el=$('matches');
  if(!matches.length){el.innerHTML='<div class="empty">Nenhum jogo criado.</div>';return}
