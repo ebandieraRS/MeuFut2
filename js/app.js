@@ -39,9 +39,16 @@ async function loadAppInternal(){
  if(error)throw error;if(!me){await db.auth.signOut();throw new Error('Esta conta não está cadastrada como integrante ativo do grupo.')}
  admin=me.role==='admin';document.querySelectorAll('.admin-only').forEach(el=>show(el.id?el.id:el,admin));
  const a=await db.from('group_members').select('id,display_name,skill_level,active,is_goalkeeper,is_line_goalkeeper,is_fixed').eq('group_id',cfg.GROUP_ID).eq('active',true).order('display_name');if(a.error)throw a.error;members=a.data||[];populateCashMembers();updateCashFields();
- const b=await db.from('matches').select('id,title,starts_at,location,player_limit,status').eq('group_id',cfg.GROUP_ID).order('starts_at');if(b.error)throw b.error;
- // Defensive deduplication by primary key. The database query itself should return unique IDs.
- matches=Array.from(new Map((b.data||[]).map(match=>[match.id,match])).values());
+ const b=await db.from('matches').select('id,title,starts_at,location,player_limit,status,closed_at').eq('group_id',cfg.GROUP_ID).order('starts_at');if(b.error)throw b.error;
+ // Keep the next open games at the top, followed by history (newest completed first).
+ const statusRank={scheduled:0,completed:1,cancelled:2};
+ matches=Array.from(new Map((b.data||[]).map(match=>[match.id,match])).values())
+  .sort((a,b)=>{
+   const rank=(statusRank[a.status]??9)-(statusRank[b.status]??9);
+   if(rank!==0)return rank;
+   const aDate=new Date(a.starts_at).getTime(),bDate=new Date(b.starts_at).getTime();
+   return a.status==='scheduled'?aDate-bDate:bDate-aDate;
+  });
  await renderPlayers();await renderMatches();await renderTeams();await renderCash();renderStats();populateMatches();updateMatchTitlePreview();
 }
 $('player-form').addEventListener('submit',async e=>{
@@ -144,17 +151,26 @@ $('match-form').addEventListener('submit',async e=>{
  $('match-limit').value='20';
  await loadApp();
 });
+function matchIsTodayOrPast(match){
+ const date=new Date(match.starts_at);
+ if(Number.isNaN(date.getTime()))return false;
+ const matchDay=new Date(date.getFullYear(),date.getMonth(),date.getDate());
+ const now=new Date();
+ const today=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+ return matchDay<=today;
+}
+function matchStatusLabel(status){
+ if(status==='completed')return 'Encerrada';
+ if(status==='cancelled')return 'Cancelada';
+ return 'Em aberto';
+}
 async function renderMatches(){
  const el=$('matches');
  if(!matches.length){el.innerHTML='<div class="empty">Nenhum jogo criado.</div>';return}
- // Build the complete list off-DOM, then replace once. This prevents duplicate cards
- // if another refresh starts while attendance queries are still resolving.
  const fragment=document.createDocumentFragment();
  const uniqueMatches=Array.from(new Map(matches.map(match=>[match.id,match])).values());
  for(const m of uniqueMatches){
-  const {data:a,error}=await db.from('attendance')
-    .select('member_id,status')
-    .eq('match_id',m.id);
+  const {data:a,error}=await db.from('attendance').select('member_id,status').eq('match_id',m.id);
   if(error)throw error;
   const statusByMember=new Map((a||[]).map(x=>[x.member_id,x.status]));
   const buckets={confirmed:[],declined:[],waitlist:[],pending:[]};
@@ -165,11 +181,32 @@ async function renderMatches(){
    else if(status==='waitlist')buckets.waitlist.push(p.display_name);
    else buckets.pending.push(p.display_name);
   });
+  const {data:teamRows,error:teamError}=await db.from('teams')
+   .select('id,name,score').eq('match_id',m.id).order('name');
+  if(teamError)throw teamError;
+  const teams=teamRows||[];
+  const allScoresSaved=teams.length>=2&&teams.every(t=>t.score!==null&&t.score!==undefined);
+  const scoreMarkup=allScoresSaved
+   ? `<small class="match-final-score"><b>Placar final:</b> ${teams.map(t=>`${esc(t.name)} ${t.score}`).join(' · ')}</small>`
+   : (m.status==='completed'?'<small class="muted small">Placar não informado.</small>':'');
   const count=buckets.confirmed.length;
   const listMarkup=(names,emptyText)=>names.length?`<ul>${names.map(name=>`<li>${esc(name)}</li>`).join('')}</ul>`:`<p class="muted small">${emptyText}</p>`;
+  const statusLabel=matchStatusLabel(m.status);
+  const closeButton=admin&&m.status==='scheduled'&&matchIsTodayOrPast(m)
+   ? `<button class="primary" data-close-match="${m.id}">Encerrar e salvar placar</button>`:'';
+  const editScoreButton=admin&&m.status==='completed'
+   ? `<button class="secondary" data-edit-score="${m.id}">Corrigir placar</button>`:'';
+  const deleteButton=admin
+   ? `<button class="secondary" data-delete-match="${m.id}" style="border-color:#ef4444;color:#b91c1c">Excluir pelada</button>`:'';
+  const actions=[closeButton,editScoreButton,deleteButton].filter(Boolean).join('');
   const d=document.createElement('article');
   d.className='item match-item';
-  d.innerHTML=`<div class="match-summary"><div><b>${esc(m.title)}</b><small>${dt(m.starts_at)}${m.location?' · '+esc(m.location):''}</small><span class="pill">${count}${m.player_limit?' / '+m.player_limit:''} confirmados</span></div>${admin?`<button class="secondary" data-delete-match="${m.id}" style="border-color:#ef4444;color:#b91c1c">Excluir pelada</button>`:''}</div>
+  d.innerHTML=`<div class="match-summary"><div>
+      <b>${esc(m.title)}</b>
+      <small>${dt(m.starts_at)}${m.location?' · '+esc(m.location):''}</small>
+      <span class="pill">${statusLabel}</span> <span class="pill">${count}${m.player_limit?' / '+m.player_limit:''} confirmados</span>
+      ${scoreMarkup}
+    </div>${actions?`<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">${actions}</div>`:''}</div>
     <details class="attendance-details"><summary>Ver lista de presença · ${count} confirmados, ${buckets.pending.length} pendentes</summary>
       <div class="roster-counts"><span class="status-chip status-confirmed">${count} confirmados</span><span class="status-chip status-declined">${buckets.declined.length} não vão</span><span class="status-chip status-pending">${buckets.pending.length} pendentes</span><span class="status-chip status-waitlist">${buckets.waitlist.length} em espera</span></div>
       <div class="attendance-columns">
@@ -182,8 +219,43 @@ async function renderMatches(){
   fragment.appendChild(d);
  }
  el.replaceChildren(fragment);
- el.querySelectorAll('[data-links]').forEach(b=>b.onclick=()=>makeLinks(b.dataset.links));
+ el.querySelectorAll('[data-close-match]').forEach(b=>b.onclick=()=>closeMatchWithScore(b.dataset.closeMatch,false));
+ el.querySelectorAll('[data-edit-score]').forEach(b=>b.onclick=()=>closeMatchWithScore(b.dataset.editScore,true));
  el.querySelectorAll('[data-delete-match]').forEach(b=>b.onclick=()=>deleteMatch(b.dataset.deleteMatch));
+}
+async function closeMatchWithScore(matchId,editing=false){
+ if(!admin)return toast('Somente administradores podem encerrar peladas ou corrigir placares.');
+ const match=matches.find(item=>item.id===matchId);
+ if(!match)return toast('Pelada não encontrada. Atualize o painel e tente novamente.');
+ if(!editing&&match.status!=='scheduled')return toast('Esta pelada não está em aberto.');
+ if(editing&&match.status!=='completed')return toast('Somente peladas encerradas permitem corrigir o placar.');
+ if(!editing&&!matchIsTodayOrPast(match))return toast('Só é possível encerrar a pelada no dia do jogo ou depois dele.');
+ const {data:teamRows,error}=await db.from('teams')
+  .select('id,name,score').eq('match_id',matchId).order('name');
+ if(error)return toast('Não foi possível carregar a divisão salva: '+error.message);
+ const teams=teamRows||[];
+ if(teams.length<2)return toast('Ainda não há uma divisão de pelo menos dois times salva. Vá à aba Times e sorteie a divisão utilizada antes de encerrar a pelada.');
+ const actionText=editing?'corrigir o placar':'encerrar a pelada e salvar o placar';
+ if(!confirm(`Deseja ${actionText} "${match.title}"?\n\nInforme os gols de cada time nas próximas janelas.${editing?' A divisão salva será mantida.':' A divisão atual ficará registrada no histórico e a pelada deixará de aceitar novas confirmações pelo link do grupo.'}`))return;
+ const scores=[];
+ for(const team of teams){
+  let score=null;
+  while(score===null){
+   const raw=window.prompt(`Placar final — ${team.name}\nInforme os gols (número inteiro, zero ou maior):`,team.score===null||team.score===undefined?'0':String(team.score));
+   if(raw===null)return;
+   const normalized=raw.trim();
+   if(/^\d+$/.test(normalized)&&Number.isSafeInteger(Number(normalized))&&Number(normalized)<=2147483647){
+    score=Number(normalized);
+   }else{
+    alert('Informe um número inteiro igual ou maior que zero.');
+   }
+  }
+  scores.push({team_id:team.id,score});
+ }
+ const {error:saveError}=await db.rpc('close_match_with_scores',{p_match_id:matchId,p_scores:scores});
+ if(saveError)return toast('Não foi possível salvar o placar: '+saveError.message);
+ toast(editing?'Placar corrigido.':'Pelada encerrada e placar salvo.');
+ await loadApp();
 }
 async function deleteMatch(matchId){
  if(!admin)return toast('Somente administradores podem excluir peladas.');
@@ -334,7 +406,7 @@ $('draw-form').addEventListener('submit',async e=>{
 async function renderTeams(){
  const el=$('teams');el.innerHTML='';
  for(const match of matches){
-  const {data:teamRows,error}=await db.from('teams').select('id,name').eq('match_id',match.id).order('name');
+  const {data:teamRows,error}=await db.from('teams').select('id,name,score').eq('match_id',match.id).order('name');
   if(error)throw error;
   for(const team of teamRows||[]){
    const {data:players,error:playersError}=await db.from('team_players')
@@ -345,7 +417,7 @@ async function renderTeams(){
    const total=roster.reduce((sum,p)=>sum+p.skill_level_at_draw,0);
    roster.sort((a,b)=>Number(Boolean(b.is_assigned_goalkeeper))-Number(Boolean(a.is_assigned_goalkeeper)));
    const card=document.createElement('article');card.className='team';
-   card.innerHTML=`<div class="team-title-row"><h3>${esc(team.name)}</h3><span class="pill">Nível total ${total}</span></div><small>${esc(match.title)} · ${dt(match.starts_at)}</small><ul>${roster.map(p=>`<li>${esc(p.group_members?.display_name||'Jogador')} ${p.is_assigned_goalkeeper?'<span class="goalkeeper-tag">🧤 Goleiro deste time</span>':''} <span class="muted">(${p.skill_level_at_draw})</span></li>`).join('')}</ul>`;
+   card.innerHTML=`<div class="team-title-row"><h3>${esc(team.name)}</h3><span class="pill">Nível total ${total}</span>${team.score!==null&&team.score!==undefined?`<span class="pill">Placar: ${team.score}</span>`:''}</div><small>${esc(match.title)} · ${dt(match.starts_at)} · ${matchStatusLabel(match.status)}</small><ul>${roster.map(p=>`<li>${esc(p.group_members?.display_name||'Jogador')} ${p.is_assigned_goalkeeper?'<span class="goalkeeper-tag">🧤 Goleiro deste time</span>':''} <span class="muted">(${p.skill_level_at_draw})</span></li>`).join('')}</ul>`;
    el.appendChild(card);
   }
  }
