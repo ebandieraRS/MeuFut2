@@ -3,6 +3,9 @@ const $=id=>document.getElementById(id), cfg=window.APP_CONFIG;
 const money=c=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format((Number(c)||0)/100);
 const dt=v=>v?new Date(v).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'}):'—';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const levelNumber=v=>Number(Number(v??3).toFixed(1));
+const levelText=v=>levelNumber(v).toFixed(1);
+const validLevel=v=>Number.isFinite(Number(v))&&Number(v)>=1&&Number(v)<=5&&Math.abs(Number(v)*10-Math.round(Number(v)*10))<0.00001;
 const show=(id,on=true)=>$(id).classList.toggle('hidden',!on);
 let db, session, admin=false, members=[], matches=[], publicPlayers=[], publicToken=null, publicGroupToken=null, publicGroupMatches=[], activePublicMatchId=null;
 let teamDrafts=new Map(), dirtyTeamDivisions=new Set();
@@ -48,7 +51,7 @@ async function loadAppInternal(){
  const {data:me,error}=await db.from('group_members').select('id,role').eq('group_id',cfg.GROUP_ID).eq('user_id',userId).eq('active',true).maybeSingle();
  if(error)throw error;if(!me){await db.auth.signOut();throw new Error('Esta conta não está cadastrada como integrante ativo do grupo.')}
  admin=me.role==='admin';document.querySelectorAll('.admin-only').forEach(el=>show(el.id?el.id:el,admin));
- const a=await db.from('group_members').select('id,display_name,skill_level,active,is_goalkeeper,is_line_goalkeeper,is_fixed').eq('group_id',cfg.GROUP_ID).eq('active',true).order('display_name');if(a.error)throw a.error;members=a.data||[];populateCashMembers();updateCashFields();
+ const a=await db.from('group_members').select('id,display_name,skill_level,attack_level,defense_level,historical_level,active,is_goalkeeper,is_line_goalkeeper,is_fixed').eq('group_id',cfg.GROUP_ID).eq('active',true).order('display_name');if(a.error)throw a.error;members=a.data||[];populateCashMembers();updateCashFields();
  const b=await db.from('matches').select('id,title,starts_at,location,player_limit,status,closed_at').eq('group_id',cfg.GROUP_ID).order('starts_at');if(b.error)throw b.error;
  // Keep the next open games at the top, followed by history (newest completed first).
  const statusRank={scheduled:0,completed:1,cancelled:2};
@@ -63,10 +66,16 @@ async function loadAppInternal(){
 }
 $('player-form').addEventListener('submit',async e=>{
  e.preventDefault();
+ const attack=Number($('player-attack').value),defense=Number($('player-defense').value),history=Number($('player-history').value);
+ if(!validLevel(attack)||!validLevel(defense)||!validLevel(history))return toast('Informe os três níveis entre 1,0 e 5,0, com uma casa decimal.');
  const payload={
   group_id:cfg.GROUP_ID,
   display_name:$('player-name').value.trim(),
-  skill_level:+$('player-level').value,
+  skill_level:Math.round((attack+defense+history)/3),
+  attack_level:attack,
+  defense_level:defense,
+  historical_level:history,
+  historical_level_base:history,
   role:'player',
   is_goalkeeper:$('player-is-goalkeeper').checked,
   is_line_goalkeeper:$('player-is-line-goalkeeper').checked,
@@ -75,7 +84,7 @@ $('player-form').addEventListener('submit',async e=>{
  const {error}=await db.from('group_members').insert(payload);
  if(error)return toast(error.message);
  $('player-name').value='';
- $('player-level').value='3';
+ $('player-attack').value='3.0';$('player-defense').value='3.0';$('player-history').value='3.0';
  $('player-is-goalkeeper').checked=false;
  $('player-is-line-goalkeeper').checked=false;
  $('player-is-fixed').checked=false;
@@ -88,19 +97,39 @@ async function renderPlayers(){
  members.forEach(p=>{
   const badges=[p.is_goalkeeper?'Goleiro':null,p.is_line_goalkeeper?'Goleiro linha':null,p.is_fixed?'Fixo · mensalista':null].filter(Boolean);
   const badgeMarkup=badges.length?badges.map(label=>`<span class="player-badge">${label}</span>`).join(''):'<span class="muted small">Sem marcações</span>';
+  const attack=levelText(p.attack_level??p.skill_level??3),defense=levelText(p.defense_level??p.skill_level??3),history=levelText(p.historical_level??p.skill_level??3);
+  const levelEditor=(field,label,value)=>`<label class="player-level-edit">${label}<input type="number" min="1" max="5" step="0.1" value="${value}" data-level-member="${p.id}" data-level-field="${field}" aria-label="${label} de ${esc(p.display_name)}"></label>`;
   const d=document.createElement('article');d.className='item player-item';
-  d.innerHTML=`<div class="player-main"><div class="player-name-row"><b>${esc(p.display_name)}</b><span class="pill">Nível ${p.skill_level}</span></div><div class="player-badges">${badgeMarkup}</div></div>${admin?`<div class="player-admin-controls"><label class="check-label"><input type="checkbox" data-player-flag="is_goalkeeper" data-player="${p.id}" ${p.is_goalkeeper?'checked':''}> Goleiro</label><label class="check-label"><input type="checkbox" data-player-flag="is_line_goalkeeper" data-player="${p.id}" ${p.is_line_goalkeeper?'checked':''}> Goleiro linha</label><label class="check-label"><input type="checkbox" data-player-flag="is_fixed" data-player="${p.id}" ${p.is_fixed?'checked':''}> Fixo</label><select aria-label="Nível de ${esc(p.display_name)}" data-level="${p.id}">${[1,2,3,4,5].map(n=>`<option ${n===p.skill_level?'selected':''} value="${n}">Nível ${n}</option>`).join('')}</select><button class="secondary" data-disable="${p.id}">Desativar</button></div>`:''}`;
+  d.innerHTML=`<div class="player-main"><div class="player-name-row"><b>${esc(p.display_name)}</b></div><div class="player-ratings"><span class="rating-chip">Ataque ${attack}</span><span class="rating-chip">Defesa ${defense}</span><span class="rating-chip">Histórico ${history}</span></div><div class="player-badges">${badgeMarkup}</div></div>${admin?`<div class="player-admin-controls"><label class="check-label"><input type="checkbox" data-player-flag="is_goalkeeper" data-player="${p.id}" ${p.is_goalkeeper?'checked':''}> Goleiro</label><label class="check-label"><input type="checkbox" data-player-flag="is_line_goalkeeper" data-player="${p.id}" ${p.is_line_goalkeeper?'checked':''}> Goleiro linha</label><label class="check-label"><input type="checkbox" data-player-flag="is_fixed" data-player="${p.id}" ${p.is_fixed?'checked':''}> Fixo</label>${levelEditor('attack_level','Ataque',attack)}${levelEditor('defense_level','Defesa',defense)}${levelEditor('historical_level','Histórico',history)}<button class="secondary" data-disable="${p.id}">Desativar</button></div>`:''}`;
   el.appendChild(d);
  });
- el.querySelectorAll('[data-level]').forEach(x=>x.onchange=async()=>{
-  const id=x.dataset.level;const previous=members.find(p=>p.id===id)?.skill_level;
-  x.disabled=true;
-  const {error}=await db.from('group_members').update({skill_level:+x.value}).eq('id',id).eq('group_id',cfg.GROUP_ID);
-  x.disabled=false;
-  if(error){if(previous)x.value=String(previous);toast('Não foi possível atualizar o nível: '+error.message);return;}
-  const p=members.find(p=>p.id===id);if(p)p.skill_level=+x.value;
-  const name=members.find(p=>p.id===id)?.display_name||'Jogador';
-  toast('Nível de '+name+' atualizado.');
+ el.querySelectorAll('[data-level-field]').forEach(x=>x.onchange=async()=>{
+  const id=x.dataset.levelMember,player=members.find(p=>p.id===id);
+  if(!player)return;
+  const controls=Array.from(el.querySelectorAll(`[data-level-member="${id}"]`));
+  const valueFor=field=>Number(controls.find(input=>input.dataset.levelField===field)?.value);
+  const levels={attack_level:valueFor('attack_level'),defense_level:valueFor('defense_level'),historical_level:valueFor('historical_level')};
+  if(Object.values(levels).some(value=>!validLevel(value))){
+   controls.forEach(input=>input.value=levelText(player[input.dataset.levelField]??player.skill_level??3));
+   return toast('Use valores entre 1,0 e 5,0, com no máximo uma casa decimal.');
+  }
+  controls.forEach(input=>input.disabled=true);
+  const {data,error}=await db.rpc('update_member_skill_levels',{
+   p_member_id:id,p_attack_level:levels.attack_level,p_defense_level:levels.defense_level,p_historical_level:levels.historical_level
+  });
+  controls.forEach(input=>input.disabled=false);
+  if(error){controls.forEach(input=>input.value=levelText(player[input.dataset.levelField]??player.skill_level??3));return toast('Não foi possível atualizar os níveis: '+error.message);}
+  player.attack_level=levelNumber(data?.attack_level??levels.attack_level);
+  player.defense_level=levelNumber(data?.defense_level??levels.defense_level);
+  player.historical_level=levelNumber(data?.historical_level??levels.historical_level);
+  player.skill_level=Math.round((player.attack_level+player.defense_level+player.historical_level)/3);
+  controls.forEach(input=>input.value=levelText(player[input.dataset.levelField]));
+  const card=x.closest('.player-item');
+  if(card){
+   const ratings=card.querySelector('.player-ratings');
+   if(ratings)ratings.innerHTML=`<span class="rating-chip">Ataque ${levelText(player.attack_level)}</span><span class="rating-chip">Defesa ${levelText(player.defense_level)}</span><span class="rating-chip">Histórico ${levelText(player.historical_level)}</span>`;
+  }
+  toast('Níveis de '+player.display_name+' atualizados.');
  });
  el.querySelectorAll('[data-player-flag]').forEach(x=>x.addEventListener('change',async()=>{
   const id=x.dataset.player,field=x.dataset.playerFlag,next=x.checked;
@@ -337,13 +366,40 @@ function shufflePlayers(list){
  for(let i=copy.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[copy[i],copy[j]]=[copy[j],copy[i]];}
  return copy;
 }
+function playerOverallSkill(player){return (Number(player.attack_level??player.skill_level??3)+Number(player.defense_level??player.skill_level??3)+Number(player.historical_level??player.skill_level??3))/3;}
+function chooseBalancedTeam(teams,player){
+ const minCount=Math.min(...teams.map(team=>team.players.length));
+ const candidates=teams.filter(team=>team.players.length===minCount);
+ const costs=candidates.map(candidate=>{
+  const future=teams.map(team=>({
+   attack:team.sumAttack+(team===candidate?Number(player.attack_level):0),
+   defense:team.sumDefense+(team===candidate?Number(player.defense_level):0),
+   history:team.sumHistory+(team===candidate?Number(player.historical_level):0)
+  }));
+  let cost=0;
+  for(const key of ['attack','defense','history']){
+   const mean=future.reduce((sum,team)=>sum+team[key],0)/future.length;
+   cost+=future.reduce((sum,team)=>sum+Math.pow(team[key]-mean,2),0);
+  }
+  return {team:candidate,cost};
+ });
+ const lowest=Math.min(...costs.map(item=>item.cost));
+ const best=costs.filter(item=>Math.abs(item.cost-lowest)<0.000001).map(item=>item.team);
+ return best[Math.floor(Math.random()*best.length)];
+}
+function addPlayerToTeam(team,player){
+ team.players.push(player);
+ team.sumAttack+=Number(player.attack_level);
+ team.sumDefense+=Number(player.defense_level);
+ team.sumHistory+=Number(player.historical_level);
+}
 $('draw-form').addEventListener('submit',async e=>{
  e.preventDefault();
  const matchId=$('draw-match').value;
  const teamCount=Number($('team-count').value);
  if(!matchId)return toast('Crie um jogo primeiro.');
  const {data:attendance,error}=await db.from('attendance')
-  .select('member_id,group_members(id,group_id,display_name,skill_level,active,is_goalkeeper,is_line_goalkeeper)')
+  .select('member_id,group_members(id,group_id,display_name,skill_level,attack_level,defense_level,historical_level,active,is_goalkeeper,is_line_goalkeeper)')
   .eq('match_id',matchId).eq('status','confirmed');
  if(error)return toast('Não foi possível carregar os confirmados: '+error.message);
  const attendanceRows=attendance||[];
@@ -351,55 +407,37 @@ $('draw-form').addEventListener('submit',async e=>{
  const players=Array.from(new Map(attendanceRows
   .filter(row=>row.group_members && row.group_members.active===true && row.group_members.id===row.member_id && row.group_members.group_id===cfg.GROUP_ID)
   .map(row=>row.group_members).map(player=>[player.id,player])).values())
-  .map(player=>({...player,skill_level:Number(player.skill_level)||3}));
+  .map(player=>({
+   ...player,
+   attack_level:levelNumber(player.attack_level??player.skill_level??3),
+   defense_level:levelNumber(player.defense_level??player.skill_level??3),
+   historical_level:levelNumber(player.historical_level??player.skill_level??3)
+  }));
  if(players.length<teamCount){
   const extra=inactiveConfirmed?' Há '+inactiveConfirmed+' confirmado(s) desativado(s), que foram ignorados no sorteio.':'';
   return toast('Não há jogadores ativos suficientes para essa quantidade de times.'+extra);
  }
-
- // Prioridade: goleiros cadastrados como goleiro. Só usamos goleiro linha para
- // preencher vagas de goleiro que continuem faltando.
  const primaryKeepers=shufflePlayers(players.filter(p=>p.is_goalkeeper));
  const lineKeepers=shufflePlayers(players.filter(p=>p.is_line_goalkeeper&&!p.is_goalkeeper));
  const chosenKeepers=primaryKeepers.slice(0,teamCount);
- if(chosenKeepers.length<teamCount){
-  chosenKeepers.push(...lineKeepers.slice(0,teamCount-chosenKeepers.length));
- }
- // Não bloqueia o sorteio quando faltam goleiros elegíveis.
- // Todos os goleiros disponíveis serão designados; os demais times ficam sem goleiro marcado.
-
-
+ if(chosenKeepers.length<teamCount)chosenKeepers.push(...lineKeepers.slice(0,teamCount-chosenKeepers.length));
  const teams=Array.from({length:teamCount},(_,i)=>({
-  name:'Time '+String.fromCharCode(65+i),players:[],sum:0,goalkeeper_member_id:null
+  name:'Time '+String.fromCharCode(65+i),players:[],sumAttack:0,sumDefense:0,sumHistory:0,goalkeeper_member_id:null
  }));
  const selectedKeeperIds=new Set(chosenKeepers.map(p=>p.id));
- // Distribui primeiro os goleiros escolhidos, colocando o de maior nível no
- // time com menor soma atual; isso equilibra também a posição de goleiro.
- const orderedKeepers=shufflePlayers(chosenKeepers).sort((a,b)=>b.skill_level-a.skill_level);
+ const orderedKeepers=shufflePlayers(chosenKeepers).sort((a,b)=>playerOverallSkill(b)-playerOverallSkill(a));
  for(const keeper of orderedKeepers){
-  const lowest=Math.min(...teams.map(t=>t.sum));
-  const candidates=teams.filter(t=>t.sum===lowest);
-  const team=candidates[Math.floor(Math.random()*candidates.length)];
+  const team=chooseBalancedTeam(teams,keeper);
   team.goalkeeper_member_id=keeper.id;
-  team.players.push(keeper);
-  team.sum+=keeper.skill_level;
+  addPlayerToTeam(team,keeper);
  }
-
- // Distribui todos os demais confirmados pelo menor total de nível disponível.
  const fieldPlayers=shufflePlayers(players.filter(p=>!selectedKeeperIds.has(p.id)))
-  .sort((a,b)=>b.skill_level-a.skill_level);
- for(const player of fieldPlayers){
-  const lowest=Math.min(...teams.map(t=>t.sum));
-  const candidates=teams.filter(t=>t.sum===lowest);
-  const team=candidates[Math.floor(Math.random()*candidates.length)];
-  team.players.push(player);
-  team.sum+=player.skill_level;
- }
-
+  .sort((a,b)=>playerOverallSkill(b)-playerOverallSkill(a));
+ for(const player of fieldPlayers)addPlayerToTeam(chooseBalancedTeam(teams,player),player);
  const payload=teams.map(team=>({
   name:team.name,
   goalkeeper_member_id:team.goalkeeper_member_id,
-  players:team.players.map(player=>({member_id:player.id,skill_level:player.skill_level}))
+  players:team.players.map(player=>({member_id:player.id,skill_level:Math.round(playerOverallSkill(player)),attack_level:player.attack_level,defense_level:player.defense_level,historical_level:player.historical_level}))
  }));
  const {error:saveError}=await db.rpc('save_balanced_teams',{p_match_id:matchId,p_teams:payload});
  if(saveError)return toast('Não foi possível salvar os times: '+saveError.message);
@@ -410,7 +448,7 @@ $('draw-form').addEventListener('submit',async e=>{
   ? 'Todos os times têm goleiro designado.'
   : `${assignedCount} de ${teamCount} times têm goleiro designado; os demais ficaram sem goleiro por falta de jogadores elegíveis.`;
  const skippedNote=inactiveConfirmed?` ${inactiveConfirmed} confirmado(s) desativado(s) ficaram fora do sorteio.`:'';
- toast('Times sorteados. '+keeperSummary+skippedNote);
+ toast('Times sorteados equilibrando ataque, defesa e histórico. '+keeperSummary+skippedNote);
 });
 async function renderTeams(){
  const el=$('teams');el.innerHTML='';
@@ -423,7 +461,7 @@ async function renderTeams(){
    teams=[];
    for(const team of teamRows||[]){
     const {data:players,error:playersError}=await db.from('team_players')
-     .select('member_id,skill_level_at_draw,is_assigned_goalkeeper,group_members(id,display_name,active,is_goalkeeper,is_line_goalkeeper)')
+     .select('member_id,skill_level_at_draw,attack_level_at_draw,defense_level_at_draw,historical_level_at_draw,is_assigned_goalkeeper,group_members(id,display_name,active,is_goalkeeper,is_line_goalkeeper)')
      .eq('team_id',team.id);
     if(playersError)throw playersError;
     const roster=(players||[]).map(p=>({
@@ -433,6 +471,9 @@ async function renderTeams(){
      is_goalkeeper:p.group_members?.is_goalkeeper===true,
      is_line_goalkeeper:p.group_members?.is_line_goalkeeper===true,
      skill_level_at_draw:Number(p.skill_level_at_draw)||0,
+     attack_level_at_draw:levelNumber(p.attack_level_at_draw??p.skill_level_at_draw??3),
+     defense_level_at_draw:levelNumber(p.defense_level_at_draw??p.skill_level_at_draw??3),
+     historical_level_at_draw:levelNumber(p.historical_level_at_draw??p.skill_level_at_draw??3),
      is_assigned_goalkeeper:p.is_assigned_goalkeeper===true
     }));
     const goalkeeper=roster.find(p=>p.is_assigned_goalkeeper);
@@ -446,14 +487,16 @@ async function renderTeams(){
   const isDirty=dirtyTeamDivisions.has(match.id);
   const teamCards=teams.map(team=>{
    const roster=[...team.players].sort((a,b)=>Number(b.id===team.goalkeeper_member_id)-Number(a.id===team.goalkeeper_member_id)||a.display_name.localeCompare(b.display_name,'pt-BR',{sensitivity:'base'}));
-   const total=roster.reduce((sum,p)=>sum+p.skill_level_at_draw,0);
+   const average=key=>roster.length?levelText(roster.reduce((sum,p)=>sum+Number(p[key]??p.skill_level_at_draw??3),0)/roster.length):'—';
+   const averageAttack=average('attack_level_at_draw'),averageDefense=average('defense_level_at_draw'),averageHistory=average('historical_level_at_draw');
    const playerRows=roster.map(player=>{
     const keeper=player.id===team.goalkeeper_member_id;
     const inactiveNote=player.active?'':' <span class="muted small">(jogador desativado; mantido na divisão)</span>';
     const mover=editable?`<label class="team-move-control">Mover para<select data-player-move="${esc(player.id)}" data-match-move="${esc(match.id)}" data-current-team="${esc(team.name)}" ${player.active?'':'disabled'}>${teams.map(target=>`<option value="${esc(target.name)}" ${target.name===team.name?'selected':''}>${esc(target.name)}</option>`).join('')}</select></label>`:'';
-    return `<li class="team-player-row"><div><span>${esc(player.display_name)}</span> ${keeper?'<span class="goalkeeper-tag">🧤 Goleiro deste time</span>':''} <span class="muted">(${player.skill_level_at_draw})</span>${inactiveNote}</div>${mover}</li>`;
+    const playerRatings=`<span class="muted small">(Ataque ${levelText(player.attack_level_at_draw)} · Defesa ${levelText(player.defense_level_at_draw)} · Histórico ${levelText(player.historical_level_at_draw)})</span>`;
+    return `<li class="team-player-row"><div><span>${esc(player.display_name)}</span> ${keeper?'<span class="goalkeeper-tag">🧤 Goleiro deste time</span>':''} ${playerRatings}${inactiveNote}</div>${mover}</li>`;
    }).join('');
-   return `<article class="team"><div class="team-title-row"><h3>${esc(team.name)}</h3><span class="pill">Nível total ${total}</span>${team.score!==null&&team.score!==undefined?`<span class="pill">Placar: ${team.score}</span>`:''}</div><small>${match.status==='scheduled'?'':matchStatusLabel(match.status)}</small><ul class="team-roster">${playerRows}</ul></article>`;
+   return `<article class="team"><div class="team-title-row"><h3>${esc(team.name)}</h3><span class="pill">Médias · Ataque ${averageAttack} · Defesa ${averageDefense} · Histórico ${averageHistory}</span>${team.score!==null&&team.score!==undefined?`<span class="pill">Placar: ${team.score}</span>`:''}</div><small>${match.status==='scheduled'?'':matchStatusLabel(match.status)}</small><ul class="team-roster">${playerRows}</ul></article>`;
   }).join('');
   const controls=editable?`<div class="team-division-actions"><p class="muted small">Ajuste a divisão pelos seletores “Mover para”. Cada time precisa manter ao menos um jogador.</p><div><button class="primary" data-save-division="${esc(match.id)}" ${isDirty?'':'disabled'}>Salvar divisão ajustada</button> <button class="secondary" data-cancel-division="${esc(match.id)}" ${isDirty?'':'disabled'}>Descartar ajustes</button></div></div>`:'';
   const block=document.createElement('section');
@@ -852,7 +895,7 @@ async function respond(token,memberId,status){
 }
 
 // A guest is created by a tightly-scoped server-side RPC using the match link token.
-// The database sets skill_level=3 and records attendance in the same transaction.
+// The database defaults the three new ratings to 3.0 and records attendance in the same transaction.
 $('guest-form').addEventListener('submit',async e=>{
  e.preventDefault();
  if(!publicToken&&!publicGroupToken)return;
@@ -873,8 +916,8 @@ $('guest-form').addEventListener('submit',async e=>{
   if(publicGroupToken)await loadGroupMatchAttendance(publicGroupToken,activePublicMatchId,data);
   else await loadAttendance(publicToken,data);
   const added=publicPlayers.find(p=>p.member_id===data);
-  if(added?.attendance_status==='waitlist')msg('guest-message',`${added.player_name} foi cadastrado como jogador nível 3, mas a pelada está lotada e entrou na lista de espera.`);
-  else msg('guest-message',`${added?.player_name||name} foi cadastrado como jogador nível 3 e presença confirmada! ⚽`);
+  if(added?.attendance_status==='waitlist')msg('guest-message',`${added.player_name} foi cadastrado com níveis iniciais 3,0/3,0/3,0, mas a pelada está lotada e entrou na lista de espera.`);
+  else msg('guest-message',`${added?.player_name||name} foi cadastrado com níveis iniciais 3,0 em ataque, defesa e histórico e teve a presença confirmada! ⚽`);
  }catch(err){msg('guest-message',err.message||'Ocorreu um erro ao cadastrar o convidado.',true)}
  finally{button.disabled=false;}
 });
