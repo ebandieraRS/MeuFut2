@@ -302,16 +302,44 @@ async function deleteMatch(matchId){
  await loadApp();
 }
 $('group-attendance-link').addEventListener('click',makeGroupAttendanceLink);
-async function makeGroupAttendanceLink(){
- if(!admin)return toast('Somente administradores podem gerar o link do grupo.');
- if(!confirm('Gerar ou renovar o link único do grupo? Se já existir um link, o anterior deixará de funcionar. Gere novamente somente se precisar substituir o link compartilhado.'))return;
- const {data,error}=await db.rpc('create_group_attendance_link',{p_group_id:cfg.GROUP_ID});
- if(error)return toast('Não foi possível gerar o link do grupo: '+error.message);
- const url=location.origin+location.pathname+'?grupo='+encodeURIComponent(data);
+$('copy-group-attendance-link').addEventListener('click',copyExistingGroupAttendanceLink);
+function groupAttendanceUrl(token){
+ return location.origin+location.pathname+'?grupo='+encodeURIComponent(token);
+}
+async function copyLinkToClipboard(url,successMessage){
  try{
   await navigator.clipboard.writeText(url);
-  alert('Link único do grupo copiado! Compartilhe este mesmo link com a turma para confirmar qualquer pelada agendada.\n\n'+url+'\n\nEste link permanece válido até ser renovado.');
- }catch{prompt('Copie o link único do grupo e compartilhe com a turma:',url)}
+  toast(successMessage);
+ }catch{
+  prompt('Copie o link do grupo:',url);
+ }
+}
+async function makeGroupAttendanceLink(){
+ if(!admin)return toast('Somente administradores podem gerar o link do grupo.');
+ if(!confirm('Gerar um NOVO link para o grupo? O link atual deixará de funcionar e deverá ser substituído em todos os lugares onde foi compartilhado.'))return;
+ const {data,error}=await db.rpc('create_group_attendance_link',{p_group_id:cfg.GROUP_ID});
+ if(error)return toast('Não foi possível gerar o novo link do grupo: '+error.message);
+ if(!data)return toast('O banco não retornou o novo link.');
+ const url=groupAttendanceUrl(data);
+ await copyLinkToClipboard(url,'Novo link gerado e copiado. O link anterior foi invalidado.');
+}
+async function copyExistingGroupAttendanceLink(){
+ if(!admin)return toast('Somente administradores podem copiar o link do grupo.');
+ const button=$('copy-group-attendance-link');
+ button.disabled=true;
+ try{
+  const {data,error}=await db.rpc('get_group_attendance_link',{p_group_id:cfg.GROUP_ID});
+  if(error){
+   console.error('Erro ao recuperar o link do grupo:',error);
+   return toast('Não foi possível recuperar o link existente: '+error.message);
+  }
+  if(!data){
+   return alert('Ainda não há um link existente que possa ser recuperado.\n\nComo os links criados antes desta atualização eram armazenados somente como hash, será necessário clicar uma vez em “Gerar novo link para o grupo”. Depois disso, este botão poderá copiar o link sem renová-lo.');
+  }
+  await copyLinkToClipboard(groupAttendanceUrl(data),'Link existente copiado. Ele continua válido e não foi renovado.');
+ }finally{
+  button.disabled=false;
+ }
 }
 function populateMatches(){
  const s=$('draw-match'),old=s.value;
