@@ -501,10 +501,43 @@ async function renderTeams(){
   const controls=editable?`<div class="team-division-actions"><p class="muted small">Ajuste a divisão pelos seletores “Mover para”. Cada time precisa manter ao menos um jogador.</p><div><button class="primary" data-save-division="${esc(match.id)}" ${isDirty?'':'disabled'}>Salvar divisão ajustada</button> <button class="secondary" data-cancel-division="${esc(match.id)}" ${isDirty?'':'disabled'}>Descartar ajustes</button></div></div>`:'';
   const block=document.createElement('section');
   block.className='team-division-block';
-  block.innerHTML=`<div class="team-division-heading"><div><h3>${esc(match.title)}</h3><small>${dt(match.starts_at)} · ${matchStatusLabel(match.status)}</small></div>${isDirty?'<span class="pill team-unsaved">Alterações não salvas</span>':''}</div>${controls}<div class="team-grid">${teamCards}</div>`;
+  block.innerHTML=`<div class="team-division-heading"><div><h3>${esc(match.title)}</h3><small>${dt(match.starts_at)} · ${matchStatusLabel(match.status)}</small></div><div class="team-heading-actions"><button type="button" class="secondary" data-copy-division="${esc(match.id)}">Copiar divisão</button>${isDirty?'<span class="pill team-unsaved">Alterações não salvas</span>':''}</div></div>${controls}<div class="team-grid">${teamCards}</div>`;
   el.appendChild(block);
  }
  if(!savedDivisionCount)el.innerHTML='<div class="empty">Nenhum time sorteado.</div>';
+}
+
+function buildDivisionClipboardText(matchId){
+ const match=matches.find(item=>item.id===matchId);
+ const teams=teamDrafts.get(matchId)||[];
+ if(!match||!teams.length)return '';
+ const sections=teams.map(team=>{
+  const roster=[...team.players].sort((a,b)=>Number(b.id===team.goalkeeper_member_id)-Number(a.id===team.goalkeeper_member_id)||a.display_name.localeCompare(b.display_name,'pt-BR',{sensitivity:'base'}));
+  const names=roster.map(player=>`- ${player.display_name}${player.id===team.goalkeeper_member_id?' 🧤':''}`);
+  return [team.name,...names].join('\n');
+ });
+ return [`Pelada: ${match.title}`,`Data: ${dt(match.starts_at)}`,'',...sections].join('\n\n').trim();
+}
+async function copyDivisionToClipboard(matchId){
+ const text=buildDivisionClipboardText(matchId);
+ if(!text)return toast('Não encontrei a divisão para copiar.');
+ if(dirtyTeamDivisions.has(matchId))toast('Copiando a divisão exibida, incluindo os ajustes ainda não salvos.');
+ try{
+  if(navigator.clipboard&&window.isSecureContext){
+   await navigator.clipboard.writeText(text);
+   toast('Divisão copiada! Os níveis e placares não foram incluídos.');
+   return;
+  }
+ }catch(error){console.warn('Clipboard API falhou; tentando método alternativo.',error)}
+ const textarea=document.createElement('textarea');
+ textarea.value=text;textarea.setAttribute('readonly','');
+ textarea.style.position='fixed';textarea.style.left='-9999px';textarea.style.top='0';
+ document.body.appendChild(textarea);textarea.focus();textarea.select();
+ let copied=false;
+ try{copied=document.execCommand('copy')}catch(error){console.warn('Cópia alternativa falhou.',error)}
+ textarea.remove();
+ if(copied)toast('Divisão copiada! Os níveis e placares não foram incluídos.');
+ else window.prompt('Copie a divisão abaixo:',text);
 }
 
 $('teams').addEventListener('change',async e=>{
@@ -529,6 +562,8 @@ $('teams').addEventListener('change',async e=>{
 });
 
 $('teams').addEventListener('click',async e=>{
+ const copy=e.target.closest('[data-copy-division]');
+ if(copy){await copyDivisionToClipboard(copy.dataset.copyDivision);return;}
  const save=e.target.closest('[data-save-division]');
  if(save){await saveManualDivision(save.dataset.saveDivision);return;}
  const cancel=e.target.closest('[data-cancel-division]');
