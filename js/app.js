@@ -210,14 +210,12 @@ async function renderMatches(){
   const count=buckets.confirmed.length;
   const listMarkup=(names,emptyText)=>names.length?`<ul>${names.map(name=>`<li>${esc(name)}</li>`).join('')}</ul>`:`<p class="muted small">${emptyText}</p>`;
   const statusLabel=matchStatusLabel(m.status);
-  const washerName=m.vest_washer_name||'';
-  const washerIndicator=`<small class="match-washer-indicator">🧺 <b>Responsável por lavar os coletes:</b> ${washerName?esc(washerName):'Não definido'}</small>`;
   const washerMemberIsActive=members.some(player=>player.id===m.vest_washer_member_id);
   const washerInactiveOption=m.vest_washer_member_id&&!washerMemberIsActive
    ? `<option value="${esc(m.vest_washer_member_id)}" selected>${esc(washerName||'Jogador inativo')}</option>`:'';
   const washerOptions=`<option value="" ${m.vest_washer_member_id?'':'selected'}>Não definido</option>${washerInactiveOption}${members.map(player=>`<option value="${esc(player.id)}" ${player.id===m.vest_washer_member_id?'selected':''}>${esc(player.display_name)}</option>`).join('')}`;
   const washerControl=admin
-   ? `<div class="match-washer-control" style="display:flex;align-items:end;gap:8px;flex-wrap:wrap;margin:12px 0"><label for="vest-washer-${esc(m.id)}" style="flex:1;min-width:220px">🧺 Responsável por lavar os coletes<select id="vest-washer-${esc(m.id)}" data-vest-washer-select="${esc(m.id)}">${washerOptions}</select></label><button class="secondary" data-save-vest-washer="${esc(m.id)}">Salvar responsável</button></div>`:'';
+   ? `<details class="match-washer-settings" style="margin:12px 0"><summary style="cursor:pointer;font-weight:600">🧺 Definir ou alterar responsável pelos coletes</summary><div class="match-washer-control" style="display:flex;align-items:end;gap:8px;flex-wrap:wrap;margin:10px 0 0"><label for="vest-washer-${esc(m.id)}" style="flex:1;min-width:220px">Responsável<select id="vest-washer-${esc(m.id)}" data-vest-washer-select="${esc(m.id)}">${washerOptions}</select></label><button class="secondary" data-save-vest-washer="${esc(m.id)}">Salvar responsável</button></div></details>`:'';
   const closeButton=admin&&m.status==='scheduled'&&matchIsTodayOrPast(m)
    ? `<button class="primary" data-close-match="${m.id}">Encerrar e salvar placar</button>`:'';
   const editScoreButton=admin&&m.status==='completed'
@@ -232,7 +230,6 @@ async function renderMatches(){
       <small>${dt(m.starts_at)}${m.location?' · '+esc(m.location):''}</small>
       <span class="pill">${statusLabel}</span> <span class="pill">${count}${m.player_limit?' / '+m.player_limit:''} confirmados</span>
       ${scoreMarkup}
-      ${washerIndicator}
     </div>${actions?`<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">${actions}</div>`:''}</div>
     ${washerControl}
     <details class="attendance-details"><summary>Ver lista de presença · ${count} confirmados, ${buckets.pending.length} pendentes</summary>
@@ -908,7 +905,7 @@ async function loadGroupAttendance(token,preserveMatchId=null,preserveMemberId=n
  }
  const select=$('public-match-select');
  const previous=preserveMatchId||select.value;
- select.innerHTML=publicGroupMatches.map(match=>`<option value="${match.match_id}">${esc(match.match_title)} — ${dt(match.starts_at)} · 🧺 ${esc(match.vest_washer_name||'Responsável a definir')}</option>`).join('');
+ select.innerHTML=publicGroupMatches.map(match=>`<option value="${match.match_id}">${esc(match.match_title)} — ${dt(match.starts_at)}</option>`).join('');
  activePublicMatchId=publicGroupMatches.some(m=>m.match_id===previous)?previous:publicGroupMatches[0].match_id;
  select.value=activePublicMatchId;
  select.disabled=false;
@@ -933,7 +930,7 @@ async function loadGroupMatchAttendance(token,matchId,preserveMemberId=null){
  show('guest-registration',true);
  $('add-guest-button').disabled=false;
  $('public-title').textContent=match.match_title;
- $('public-meta').textContent=dt(match.starts_at)+(match.location?' · '+match.location:'')+' · 🧺 Responsável pelos coletes: '+(match.vest_washer_name||'A definir');
+ $('public-meta').textContent=dt(match.starts_at)+(match.location?' · '+match.location:'');
  const select=$('public-member-select');
  const previous=preserveMemberId||select.value;
  const alphabeticPlayers=[...publicPlayers].sort((a,b)=>String(a.player_name||'').localeCompare(String(b.player_name||''),'pt-BR',{sensitivity:'base'}));
