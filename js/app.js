@@ -52,7 +52,7 @@ async function loadAppInternal(){
  if(error)throw error;if(!me){await db.auth.signOut();throw new Error('Esta conta não está cadastrada como integrante ativo do grupo.')}
  admin=me.role==='admin';document.querySelectorAll('.admin-only').forEach(el=>show(el.id?el.id:el,admin));
  const a=await db.from('group_members').select('id,display_name,skill_level,attack_level,defense_level,historical_level,active,is_goalkeeper,is_line_goalkeeper,is_fixed').eq('group_id',cfg.GROUP_ID).eq('active',true).order('display_name');if(a.error)throw a.error;members=a.data||[];populateCashMembers();updateCashFields();
- const b=await db.from('matches').select('id,title,starts_at,location,player_limit,status,closed_at').eq('group_id',cfg.GROUP_ID).order('starts_at');if(b.error)throw b.error;
+ const b=await db.from('matches').select('id,title,starts_at,location,player_limit,status,closed_at,vest_washer_member_id,vest_washer_name').eq('group_id',cfg.GROUP_ID).order('starts_at');if(b.error)throw b.error;
  // Keep the next open games at the top, followed by history (newest completed first).
  const statusRank={scheduled:0,completed:1,cancelled:2};
  matches=Array.from(new Map((b.data||[]).map(match=>[match.id,match])).values())
@@ -210,6 +210,14 @@ async function renderMatches(){
   const count=buckets.confirmed.length;
   const listMarkup=(names,emptyText)=>names.length?`<ul>${names.map(name=>`<li>${esc(name)}</li>`).join('')}</ul>`:`<p class="muted small">${emptyText}</p>`;
   const statusLabel=matchStatusLabel(m.status);
+  const washerName=m.vest_washer_name||'';
+  const washerIndicator=`<small class="match-washer-indicator">🧺 <b>Responsável por lavar os coletes:</b> ${washerName?esc(washerName):'Não definido'}</small>`;
+  const washerMemberIsActive=members.some(player=>player.id===m.vest_washer_member_id);
+  const washerInactiveOption=m.vest_washer_member_id&&!washerMemberIsActive
+   ? `<option value="${esc(m.vest_washer_member_id)}" selected>${esc(washerName||'Jogador inativo')}</option>`:'';
+  const washerOptions=`<option value="" ${m.vest_washer_member_id?'':'selected'}>Não definido</option>${washerInactiveOption}${members.map(player=>`<option value="${esc(player.id)}" ${player.id===m.vest_washer_member_id?'selected':''}>${esc(player.display_name)}</option>`).join('')}`;
+  const washerControl=admin
+   ? `<div class="match-washer-control" style="display:flex;align-items:end;gap:8px;flex-wrap:wrap;margin:12px 0"><label for="vest-washer-${esc(m.id)}" style="flex:1;min-width:220px">🧺 Responsável por lavar os coletes<select id="vest-washer-${esc(m.id)}" data-vest-washer-select="${esc(m.id)}">${washerOptions}</select></label><button class="secondary" data-save-vest-washer="${esc(m.id)}">Salvar responsável</button></div>`:'';
   const closeButton=admin&&m.status==='scheduled'&&matchIsTodayOrPast(m)
    ? `<button class="primary" data-close-match="${m.id}">Encerrar e salvar placar</button>`:'';
   const editScoreButton=admin&&m.status==='completed'
@@ -224,7 +232,9 @@ async function renderMatches(){
       <small>${dt(m.starts_at)}${m.location?' · '+esc(m.location):''}</small>
       <span class="pill">${statusLabel}</span> <span class="pill">${count}${m.player_limit?' / '+m.player_limit:''} confirmados</span>
       ${scoreMarkup}
+      ${washerIndicator}
     </div>${actions?`<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">${actions}</div>`:''}</div>
+    ${washerControl}
     <details class="attendance-details"><summary>Ver lista de presença · ${count} confirmados, ${buckets.pending.length} pendentes</summary>
       <div class="roster-counts"><span class="status-chip status-confirmed">${count} confirmados</span><span class="status-chip status-declined">${buckets.declined.length} não vão</span><span class="status-chip status-pending">${buckets.pending.length} pendentes</span><span class="status-chip status-waitlist">${buckets.waitlist.length} em espera</span></div>
       <div class="attendance-columns">
@@ -240,6 +250,23 @@ async function renderMatches(){
  el.querySelectorAll('[data-close-match]').forEach(b=>b.onclick=()=>closeMatchWithScore(b.dataset.closeMatch,false));
  el.querySelectorAll('[data-edit-score]').forEach(b=>b.onclick=()=>closeMatchWithScore(b.dataset.editScore,true));
  el.querySelectorAll('[data-delete-match]').forEach(b=>b.onclick=()=>deleteMatch(b.dataset.deleteMatch));
+ el.querySelectorAll('[data-save-vest-washer]').forEach(b=>b.onclick=()=>saveVestWasher(b.dataset.saveVestWasher));
+}
+async function saveVestWasher(matchId){
+ if(!admin)return toast('Somente administradores podem definir o responsável pelos coletes.');
+ const select=$(`vest-washer-${matchId}`);
+ if(!select)return toast('Campo do responsável não encontrado. Atualize o painel e tente novamente.');
+ const memberId=select.value||null;
+ const {data,error}=await db.rpc('set_match_vest_washer',{p_match_id:matchId,p_member_id:memberId});
+ if(error)return toast('Não foi possível salvar o responsável: '+error.message);
+ const match=matches.find(item=>item.id===matchId);
+ if(match){
+  match.vest_washer_member_id=data?.vest_washer_member_id??memberId;
+  match.vest_washer_name=data?.vest_washer_name??(members.find(player=>player.id===memberId)?.display_name||null);
+ }
+ toast(memberId?'Responsável pelos coletes salvo.':'Responsável pelos coletes removido.');
+ await renderMatches();
+ await loadMatchHistory('history-games-admin');
 }
 async function closeMatchWithScore(matchId,editing=false){
  if(!admin)return toast('Somente administradores podem encerrar peladas ou corrigir placares.');
@@ -738,7 +765,8 @@ async function loadMatchHistory(containerId){
   }).join(''):'<div class="empty">A divisão dos times não foi salva para esta pelada.</div>';
   const when=dt(game.starts_at);
   const location=game.location?` · ${esc(game.location)}`:'';
-  return `<article class="history-game"><div class="history-game-heading"><div><p class="eyebrow">PELADEIRA ENCERRADA</p><h2>${esc(game.title||'Pelada sem nome')}</h2><small>${when}${location}</small></div><span class="pill history-closed-pill">Encerrada</span></div>${scoreline}<div class="history-teams">${teamsMarkup}</div></article>`;
+  const washer=game.vest_washer_name?`<small class="history-washer">🧺 <b>Responsável por lavar os coletes:</b> ${esc(game.vest_washer_name)}</small>`:'<small class="history-washer muted">🧺 Responsável por lavar os coletes: Não informado</small>';
+  return `<article class="history-game"><div class="history-game-heading"><div><p class="eyebrow">PELADEIRA ENCERRADA</p><h2>${esc(game.title||'Pelada sem nome')}</h2><small>${when}${location}</small>${washer}</div><span class="pill history-closed-pill">Encerrada</span></div>${scoreline}<div class="history-teams">${teamsMarkup}</div></article>`;
  }).join('');
 }
 function fillRosterList(id, players, emptyText){
@@ -880,7 +908,7 @@ async function loadGroupAttendance(token,preserveMatchId=null,preserveMemberId=n
  }
  const select=$('public-match-select');
  const previous=preserveMatchId||select.value;
- select.innerHTML=publicGroupMatches.map(match=>`<option value="${match.match_id}">${esc(match.match_title)} — ${dt(match.starts_at)}</option>`).join('');
+ select.innerHTML=publicGroupMatches.map(match=>`<option value="${match.match_id}">${esc(match.match_title)} — ${dt(match.starts_at)} · 🧺 ${esc(match.vest_washer_name||'Responsável a definir')}</option>`).join('');
  activePublicMatchId=publicGroupMatches.some(m=>m.match_id===previous)?previous:publicGroupMatches[0].match_id;
  select.value=activePublicMatchId;
  select.disabled=false;
@@ -905,7 +933,7 @@ async function loadGroupMatchAttendance(token,matchId,preserveMemberId=null){
  show('guest-registration',true);
  $('add-guest-button').disabled=false;
  $('public-title').textContent=match.match_title;
- $('public-meta').textContent=dt(match.starts_at)+(match.location?' · '+match.location:'');
+ $('public-meta').textContent=dt(match.starts_at)+(match.location?' · '+match.location:'')+' · 🧺 Responsável pelos coletes: '+(match.vest_washer_name||'A definir');
  const select=$('public-member-select');
  const previous=preserveMemberId||select.value;
  const alphabeticPlayers=[...publicPlayers].sort((a,b)=>String(a.player_name||'').localeCompare(String(b.player_name||''),'pt-BR',{sensitivity:'base'}));
