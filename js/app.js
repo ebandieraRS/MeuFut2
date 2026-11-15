@@ -8,7 +8,7 @@ const levelText=v=>levelNumber(v).toFixed(1);
 const validLevel=v=>Number.isFinite(Number(v))&&Number(v)>=1&&Number(v)<=5&&Math.abs(Number(v)*10-Math.round(Number(v)*10))<0.00001;
 const show=(id,on=true)=>$(id).classList.toggle('hidden',!on);
 let db, session, admin=false, members=[], matches=[], publicPlayers=[], publicToken=null, publicGroupToken=null, publicGroupMatches=[], activePublicMatchId=null;
-let teamDrafts=new Map(), dirtyTeamDivisions=new Set();
+let teamDrafts=new Map(), dirtyTeamDivisions=new Set(), matchHistoryById=new Map();
 const cfgReady=cfg&&cfg.SUPABASE_URL?.startsWith('https://')&&!cfg.SUPABASE_URL.includes('SEU-PROJETO')&&cfg.SUPABASE_PUBLISHABLE_KEY&&!cfg.SUPABASE_PUBLISHABLE_KEY.includes('SUA_CHAVE')&&cfg.GROUP_ID&&!cfg.GROUP_ID.includes('UUID-');
 function toast(s){$('toast').textContent=s;show('toast');setTimeout(()=>show('toast',false),3500)}
 function msg(id,s,error=false){$(id).textContent=s;$(id).classList.toggle('error',error)}
@@ -222,7 +222,9 @@ async function renderMatches(){
    ? `<button class="secondary" data-edit-score="${m.id}">Corrigir placar</button>`:'';
   const deleteButton=admin
    ? `<button class="secondary" data-delete-match="${m.id}" style="border-color:#ef4444;color:#b91c1c">Excluir pelada</button>`:'';
-  const actions=[closeButton,editScoreButton,deleteButton].filter(Boolean).join('');
+  const shareInviteButton=admin&&m.status==='scheduled'
+   ? `<button class="secondary" data-share-invite="${esc(m.id)}">📲 Avisar turma no WhatsApp</button>`:'';
+  const actions=[shareInviteButton,closeButton,editScoreButton,deleteButton].filter(Boolean).join('');
   const d=document.createElement('article');
   d.className='item match-item';
   d.innerHTML=`<div class="match-summary"><div>
@@ -247,6 +249,7 @@ async function renderMatches(){
  el.querySelectorAll('[data-close-match]').forEach(b=>b.onclick=()=>closeMatchWithScore(b.dataset.closeMatch,false));
  el.querySelectorAll('[data-edit-score]').forEach(b=>b.onclick=()=>closeMatchWithScore(b.dataset.editScore,true));
  el.querySelectorAll('[data-delete-match]').forEach(b=>b.onclick=()=>deleteMatch(b.dataset.deleteMatch));
+ el.querySelectorAll('[data-share-invite]').forEach(b=>b.onclick=()=>shareMatchInviteToWhatsApp(b.dataset.shareInvite));
  el.querySelectorAll('[data-save-vest-washer]').forEach(b=>b.onclick=()=>saveVestWasher(b.dataset.saveVestWasher));
 }
 async function saveVestWasher(matchId){
@@ -329,6 +332,65 @@ $('group-attendance-link').addEventListener('click',makeGroupAttendanceLink);
 $('copy-group-attendance-link').addEventListener('click',copyExistingGroupAttendanceLink);
 function groupAttendanceUrl(token){
  return location.origin+location.pathname+'?grupo='+encodeURIComponent(token);
+}
+function whatsappMessageUrl(text){
+ return 'https://wa.me/?text='+encodeURIComponent(String(text||''));
+}
+async function copyWhatsAppMessage(text){
+ try{
+  if(navigator.clipboard&&window.isSecureContext){
+   await navigator.clipboard.writeText(text);
+   toast('Mensagem copiada. Cole no grupo do WhatsApp.');
+   return true;
+  }
+ }catch(error){console.warn('Clipboard API falhou ao copiar mensagem do WhatsApp.',error)}
+ const textarea=document.createElement('textarea');
+ textarea.value=text;textarea.setAttribute('readonly','');
+ textarea.style.position='fixed';textarea.style.left='-9999px';textarea.style.top='0';
+ document.body.appendChild(textarea);textarea.focus();textarea.select();
+ let copied=false;
+ try{copied=document.execCommand('copy')}catch(error){console.warn('Cópia alternativa da mensagem falhou.',error)}
+ textarea.remove();
+ if(copied){toast('Mensagem copiada. Cole no grupo do WhatsApp.');return true}
+ window.prompt('Copie a mensagem para enviar no WhatsApp:',text);
+ return false;
+}
+function openWhatsAppMessage(text){
+ const popup=window.open(whatsappMessageUrl(text),'_blank');
+ if(popup){try{popup.opener=null}catch{};return true}
+ void copyWhatsAppMessage(text);
+ return false;
+}
+function buildMatchInviteMessage(match,token){
+ const rows=[
+  '⚽ *Nova pelada!*',
+  '',
+  `*${match.title||'Pelada'}*`,
+  `📅 ${dt(match.starts_at)}`
+ ];
+ if(match.location)rows.push(`📍 ${match.location}`);
+ rows.push('', 'Confirme sua presença pelo link:', groupAttendanceUrl(token));
+ return rows.join('\n');
+}
+async function shareMatchInviteToWhatsApp(matchId){
+ if(!admin)return toast('Somente administradores podem compartilhar o aviso da pelada.');
+ const match=matches.find(item=>item.id===matchId);
+ if(!match||match.status!=='scheduled')return toast('Esta pelada não está em aberto.');
+ // Open a blank tab synchronously so the browser does not block WhatsApp after the RPC returns.
+ const popup=window.open('about:blank','_blank');
+ try{
+  const {data,error}=await db.rpc('get_group_attendance_link',{p_group_id:cfg.GROUP_ID});
+  if(error)throw error;
+  if(!data){if(popup&&!popup.closed)popup.close();return toast('Ainda não existe um link do grupo. Gere um novo link antes de avisar a turma.');}
+  const message=buildMatchInviteMessage(match,data);
+  const url=whatsappMessageUrl(message);
+  if(popup&&!popup.closed){popup.location.href=url;try{popup.opener=null}catch{};return}
+  await copyWhatsAppMessage(message);
+ }catch(error){
+  if(popup&&!popup.closed)popup.close();
+  console.error('Não foi possível preparar o aviso do WhatsApp:',error);
+  toast('Não foi possível preparar a mensagem: '+(error.message||error));
+ }
 }
 async function copyLinkToClipboard(url,successMessage){
  try{
@@ -553,7 +615,7 @@ async function renderTeams(){
   const controls=editable?`<div class="team-division-actions"><p class="muted small">Ajuste a divisão pelos seletores “Mover para”. Cada time precisa manter ao menos um jogador.</p><div><button class="primary" data-save-division="${esc(match.id)}" ${isDirty?'':'disabled'}>Salvar divisão ajustada</button> <button class="secondary" data-cancel-division="${esc(match.id)}" ${isDirty?'':'disabled'}>Descartar ajustes</button></div></div>`:'';
   const block=document.createElement('section');
   block.className='team-division-block';
-  block.innerHTML=`<div class="team-division-heading"><div><h3>${esc(match.title)}</h3><small>${dt(match.starts_at)} · ${matchStatusLabel(match.status)}</small></div><div class="team-heading-actions"><button type="button" class="secondary" data-copy-division="${esc(match.id)}">Copiar divisão</button>${isDirty?'<span class="pill team-unsaved">Alterações não salvas</span>':''}</div></div>${controls}<div class="team-grid">${teamCards}</div>`;
+  block.innerHTML=`<div class="team-division-heading"><div><h3>${esc(match.title)}</h3><small>${dt(match.starts_at)} · ${matchStatusLabel(match.status)}</small></div><div class="team-heading-actions"><button type="button" class="secondary" data-copy-division="${esc(match.id)}">Copiar divisão</button><button type="button" class="secondary" data-share-division="${esc(match.id)}">📲 Compartilhar divisão</button>${isDirty?'<span class="pill team-unsaved">Alterações não salvas</span>':''}</div></div>${controls}<div class="team-grid">${teamCards}</div>`;
   el.appendChild(block);
  }
  if(!savedDivisionCount)el.innerHTML='<div class="empty">Nenhum time sorteado.</div>';
@@ -569,6 +631,20 @@ function buildDivisionClipboardText(matchId){
   return [team.name,...names].join('\n');
  });
  return [`Pelada: ${match.title}`,`Data: ${dt(match.starts_at)}`,'',...sections].join('\n\n').trim();
+}
+function buildDivisionWhatsAppMessage(matchId){
+ const match=matches.find(item=>item.id===matchId);
+ const teams=teamDrafts.get(matchId)||[];
+ if(!match||!teams.length)return '';
+ const sections=teams.map(team=>{
+  const roster=[...team.players].sort((a,b)=>Number(b.id===team.goalkeeper_member_id)-Number(a.id===team.goalkeeper_member_id)||a.display_name.localeCompare(b.display_name,'pt-BR',{sensitivity:'base'}));
+  const names=roster.map(player=>`- ${player.display_name}${player.id===team.goalkeeper_member_id?' 🧤':''}`);
+  return [team.name,...names].join('\n');
+ });
+ const rows=['⚽ *Times definidos!*','',`*${match.title}*`,`📅 ${dt(match.starts_at)}`];
+ if(match.location)rows.push(`📍 ${match.location}`);
+ rows.push('',...sections);
+ return rows.join('\n').trim();
 }
 async function copyDivisionToClipboard(matchId){
  const text=buildDivisionClipboardText(matchId);
@@ -614,6 +690,15 @@ $('teams').addEventListener('change',async e=>{
 });
 
 $('teams').addEventListener('click',async e=>{
+ const share=e.target.closest('[data-share-division]');
+ if(share){
+  const matchId=share.dataset.shareDivision;
+  if(dirtyTeamDivisions.has(matchId))toast('Compartilhando a divisão exibida, incluindo os ajustes ainda não salvos.');
+  const text=buildDivisionWhatsAppMessage(matchId);
+  if(!text)return toast('Não encontrei a divisão para compartilhar.');
+  openWhatsAppMessage(text);
+  return;
+ }
  const copy=e.target.closest('[data-copy-division]');
  if(copy){await copyDivisionToClipboard(copy.dataset.copyDivision);return;}
  const save=e.target.closest('[data-save-division]');
@@ -740,6 +825,29 @@ $('cash-form').addEventListener('submit',async e=>{
 });
 function renderStats(){const m=matches.find(x=>x.status==='scheduled'&&new Date(x.starts_at)>=new Date());$('next-game').textContent=m?.title||'—';$('next-date').textContent=m?dt(m.starts_at):'Nenhum jogo futuro';if(!m){$('confirmed').textContent='0';return}db.from('attendance').select('id',{count:'exact',head:true}).eq('match_id',m.id).eq('status','confirmed').then(r=>{if(!r.error)$('confirmed').textContent=String(r.count||0)})}
 async function loadPublicBalance(){const {data,error}=await db.rpc('get_group_balance',{p_group_id:cfg.GROUP_ID});if(error){msg('balance-message','Não foi possível consultar o saldo: '+error.message,true);return}$('public-balance-value').textContent=money(data)}
+function buildMatchResultWhatsAppMessage(game){
+ const teams=Array.isArray(game?.teams)?game.teams:[];
+ if(!game||!teams.length)return '';
+ const rows=['🏆 *Resultado da pelada*','',`*${game.title||'Pelada'}*`,`📅 ${dt(game.starts_at)}`];
+ if(game.location)rows.push(`📍 ${game.location}`);
+ rows.push('');
+ teams.forEach(team=>{
+  const score=team.score===null||team.score===undefined?'—':String(team.score);
+  rows.push(`*${team.name||'Time'} — ${score} ${score==='1'?'gol':'gols'}*`);
+  const players=Array.isArray(team.players)?team.players:[];
+  if(players.length)players.forEach(name=>rows.push(`- ${name}`));
+  else rows.push('- Sem jogadores registrados');
+  rows.push('');
+ });
+ const scoredTeams=teams.filter(team=>team.score!==null&&team.score!==undefined&&Number.isFinite(Number(team.score)));
+ if(scoredTeams.length===teams.length){
+  const maxScore=Math.max(...scoredTeams.map(team=>Number(team.score)));
+  const leaders=scoredTeams.filter(team=>Number(team.score)===maxScore);
+  if(leaders.length===1)rows.push(`🏅 *Vitória: ${leaders[0].name||'Time vencedor'}*`);
+  else rows.push(`🤝 *Empate entre: ${leaders.map(team=>team.name||'Time').join(', ')}*`);
+ }
+ return rows.join('\n').trim();
+}
 async function loadMatchHistory(containerId){
  const el=$(containerId);if(!el||!db)return;
  el.innerHTML='<div class="empty">Carregando histórico…</div>';
@@ -750,6 +858,7 @@ async function loadMatchHistory(containerId){
  }
  const games=Array.isArray(data)?data:[];
  if(!games.length){el.innerHTML='<div class="empty">Ainda não há peladas encerradas com histórico disponível.</div>';return;}
+ games.forEach(game=>matchHistoryById.set(String(game.match_id),game));
  el.innerHTML=games.map(game=>{
   const teams=Array.isArray(game.teams)?game.teams:[];
   const allScoresKnown=teams.length===2&&teams.every(team=>team.score!==null&&team.score!==undefined);
@@ -763,8 +872,14 @@ async function loadMatchHistory(containerId){
   const when=dt(game.starts_at);
   const location=game.location?` · ${esc(game.location)}`:'';
   const washer=game.vest_washer_name?`<small class="history-washer">🧺 <b>Responsável por lavar os coletes:</b> ${esc(game.vest_washer_name)}</small>`:'<small class="history-washer muted">🧺 Responsável por lavar os coletes: Não informado</small>';
-  return `<article class="history-game"><div class="history-game-heading"><div><p class="eyebrow">PELADEIRA ENCERRADA</p><h2>${esc(game.title||'Pelada sem nome')}</h2><small>${when}${location}</small>${washer}</div><span class="pill history-closed-pill">Encerrada</span></div>${scoreline}<div class="history-teams">${teamsMarkup}</div></article>`;
+  return `<article class="history-game"><div class="history-game-heading"><div><p class="eyebrow">PELADEIRA ENCERRADA</p><h2>${esc(game.title||'Pelada sem nome')}</h2><small>${when}${location}</small>${washer}</div><span class="pill history-closed-pill">Encerrada</span></div>${scoreline}<div class="history-teams">${teamsMarkup}</div><div class="history-share-actions"><button type="button" class="secondary" data-share-result="${esc(game.match_id)}">📲 Compartilhar resultado no WhatsApp</button></div></article>`;
  }).join('');
+ el.querySelectorAll('[data-share-result]').forEach(button=>button.addEventListener('click',()=>{
+  const game=matchHistoryById.get(String(button.dataset.shareResult));
+  const text=buildMatchResultWhatsAppMessage(game);
+  if(!text)return toast('Não foi possível montar o resultado desta pelada.');
+  openWhatsAppMessage(text);
+ }));
 }
 function fillRosterList(id, players, emptyText){
  const el=$(id);el.innerHTML='';
