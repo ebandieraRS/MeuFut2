@@ -1119,8 +1119,8 @@ $('guest-form').addEventListener('submit',async e=>{
   if(publicGroupToken)await loadGroupMatchAttendance(publicGroupToken,activePublicMatchId,data);
   else await loadAttendance(publicToken,data);
   const added=publicPlayers.find(p=>p.member_id===data);
-  if(added?.attendance_status==='waitlist')msg('guest-message',`${added.player_name} foi cadastrado com níveis iniciais 3,0/3,0/3,0, mas o jogo está lotado e entrou na lista de espera.`);
-  else msg('guest-message',`${added?.player_name||name} foi cadastrado com níveis iniciais 3,0 em ataque, defesa e histórico e teve a presença confirmada! ⚽`);
+  if(added?.attendance_status==='waitlist')msg('guest-message',`${added.player_name} foi cadastrado, mas o jogo está lotado e entrou na lista de espera.`);
+  else msg('guest-message',`${added?.player_name||name} foi cadastrado e teve a presença confirmada! ⚽`);
  }catch(err){msg('guest-message',err.message||'Ocorreu um erro ao cadastrar o convidado.',true)}
  finally{button.disabled=false;}
 });
