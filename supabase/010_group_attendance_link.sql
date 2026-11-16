@@ -63,14 +63,14 @@ BEGIN
   FROM public.group_attendance_links l JOIN public.matches m ON m.group_id=l.group_id
   WHERE l.token_hash=encode(extensions.digest(p_token, 'sha256'), 'hex')
     AND l.revoked_at IS NULL AND m.id=p_match_id AND m.status='scheduled';
-  IF v_group IS NULL THEN RAISE EXCEPTION 'Link inválido ou pelada indisponível.'; END IF;
+  IF v_group IS NULL THEN RAISE EXCEPTION 'Link inválido ou jogo indisponível.'; END IF;
 
   PERFORM 1 FROM public.matches WHERE id=p_match_id FOR UPDATE;
   IF NOT EXISTS (
     SELECT 1 FROM public.group_attendance_links l JOIN public.matches m ON m.group_id=l.group_id
     WHERE l.token_hash=encode(extensions.digest(p_token, 'sha256'), 'hex')
       AND l.revoked_at IS NULL AND l.group_id=v_group AND m.id=p_match_id AND m.status='scheduled'
-  ) THEN RAISE EXCEPTION 'Link inválido ou pelada indisponível.'; END IF;
+  ) THEN RAISE EXCEPTION 'Link inválido ou jogo indisponível.'; END IF;
 
   IF NOT EXISTS (SELECT 1 FROM public.group_members gm WHERE gm.id=p_member_id AND gm.group_id=v_group AND gm.active) THEN
     RAISE EXCEPTION 'Jogador inválido.';
@@ -103,7 +103,7 @@ BEGIN
   FROM public.group_attendance_links l JOIN public.matches m ON m.group_id=l.group_id
   WHERE l.token_hash=encode(extensions.digest(p_token, 'sha256'), 'hex')
     AND l.revoked_at IS NULL AND m.id=p_match_id AND m.status='scheduled';
-  IF v_group IS NULL THEN RAISE EXCEPTION 'Link inválido ou pelada indisponível.'; END IF;
+  IF v_group IS NULL THEN RAISE EXCEPTION 'Link inválido ou jogo indisponível.'; END IF;
 
   PERFORM 1 FROM public.matches WHERE id=p_match_id FOR UPDATE;
   PERFORM 1 FROM public.football_groups WHERE id=v_group FOR UPDATE;
@@ -111,7 +111,7 @@ BEGIN
     SELECT 1 FROM public.group_attendance_links l JOIN public.matches m ON m.group_id=l.group_id
     WHERE l.token_hash=encode(extensions.digest(p_token, 'sha256'), 'hex')
       AND l.revoked_at IS NULL AND l.group_id=v_group AND m.id=p_match_id AND m.status='scheduled'
-  ) THEN RAISE EXCEPTION 'Link inválido ou pelada indisponível.'; END IF;
+  ) THEN RAISE EXCEPTION 'Link inválido ou jogo indisponível.'; END IF;
 
   SELECT gm.id INTO v_existing FROM public.group_members gm
   WHERE gm.group_id=v_group AND gm.active AND lower(btrim(gm.display_name))=lower(v_name) LIMIT 1;

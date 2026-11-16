@@ -147,9 +147,9 @@ async function renderPlayers(){
 }
 $('match-form').addEventListener('submit',async e=>{
  e.preventDefault();
- if(!admin)return toast('Somente administradores podem criar peladas.');
+ if(!admin)return toast('Somente administradores podem criar jogos.');
  const matchTitle=$('match-name').value.trim();
- if(!matchTitle)return toast('Informe o nome da pelada.');
+ if(!matchTitle)return toast('Informe o nome do jogo.');
  const dateValue=$('match-date').value;
  const date=new Date(dateValue);
  if(!dateValue||Number.isNaN(date.getTime()))return toast('Informe uma data e hora válidas.');
@@ -162,7 +162,7 @@ $('match-form').addEventListener('submit',async e=>{
   status:'scheduled'
  });
  if(error)return toast(error.message);
- toast(`Pelada criada: ${matchTitle}`);
+ toast(`Jogo criado: ${matchTitle}`);
  $('match-name').value='';
  $('match-date').value='';
  $('match-location').value='';
@@ -221,7 +221,7 @@ async function renderMatches(){
   const editScoreButton=admin&&m.status==='completed'
    ? `<button class="secondary" data-edit-score="${m.id}">Corrigir placar</button>`:'';
   const deleteButton=admin
-   ? `<button class="secondary" data-delete-match="${m.id}" style="border-color:#ef4444;color:#b91c1c">Excluir pelada</button>`:'';
+   ? `<button class="secondary" data-delete-match="${m.id}" style="border-color:#ef4444;color:#b91c1c">Excluir jogo</button>`:'';
   const shareInviteButton=admin&&m.status==='scheduled'
    ? `<button class="secondary" data-share-invite="${esc(m.id)}">📲 Avisar turma no WhatsApp</button>`:'';
   const actions=[shareInviteButton,closeButton,editScoreButton,deleteButton].filter(Boolean).join('');
@@ -269,17 +269,17 @@ async function saveVestWasher(matchId){
  await loadMatchHistory('history-games-admin');
 }
 async function closeMatchWithScore(matchId,editing=false){
- if(!admin)return toast('Somente administradores podem encerrar peladas ou corrigir placares.');
+ if(!admin)return toast('Somente administradores podem encerrar jogos ou corrigir placares.');
  const match=matches.find(item=>item.id===matchId);
- if(!match)return toast('Pelada não encontrada. Atualize o painel e tente novamente.');
- if(!editing&&match.status!=='scheduled')return toast('Esta pelada não está em aberto.');
- if(editing&&match.status!=='completed')return toast('Somente peladas encerradas permitem corrigir o placar.');
- if(!editing&&!matchIsTodayOrPast(match))return toast('Só é possível encerrar a pelada no dia do jogo ou depois dele.');
+ if(!match)return toast('Jogo não encontrado. Atualize o painel e tente novamente.');
+ if(!editing&&match.status!=='scheduled')return toast('Este jogo não está em aberto.');
+ if(editing&&match.status!=='completed')return toast('Somente jogos encerrados permitem corrigir o placar.');
+ if(!editing&&!matchIsTodayOrPast(match))return toast('Só é possível encerrar o jogo no dia do jogo ou depois dele.');
  const {data:teamRows,error}=await db.from('teams')
   .select('id,name,score').eq('match_id',matchId).order('name');
  if(error)return toast('Não foi possível carregar a divisão salva: '+error.message);
  const teams=teamRows||[];
- if(teams.length<2)return toast('Ainda não há uma divisão de pelo menos dois times salva. Vá à aba Times e sorteie a divisão utilizada antes de encerrar a pelada.');
+ if(teams.length<2)return toast('Ainda não há uma divisão de pelo menos dois times salva. Vá à aba Times e sorteie a divisão utilizada antes de encerrar o jogo.');
  const rosterByTeam=new Map(teams.map(team=>[team.id,[]]));
  const {data:rosterRows,error:rosterError}=await db.from('team_players')
   .select('team_id,member_id,group_members(display_name)')
@@ -290,8 +290,8 @@ async function closeMatchWithScore(matchId,editing=false){
   if(names)names.push(row.group_members?.display_name||'Jogador não encontrado');
  }
  for(const names of rosterByTeam.values())names.sort((a,b)=>a.localeCompare(b,'pt-BR',{sensitivity:'base'}));
- const actionText=editing?'corrigir o placar':'encerrar a pelada e salvar o placar';
- if(!confirm(`Deseja ${actionText} "${match.title}"?\n\nInforme os gols de cada time nas próximas janelas.${editing?' A divisão salva será mantida.':' A divisão atual ficará registrada no histórico e a pelada deixará de aceitar novas confirmações pelo link do grupo.'}`))return;
+ const actionText=editing?'corrigir o placar':'encerrar o jogo e salvar o placar';
+ if(!confirm(`Deseja ${actionText} "${match.title}"?\n\nInforme os gols de cada time nas próximas janelas.${editing?' A divisão salva será mantida.':' A divisão atual ficará registrada no histórico e o jogo deixará de aceitar novas confirmações pelo link do grupo.'}`))return;
  const scores=[];
  for(const team of teams){
   let score=null;
@@ -311,21 +311,21 @@ async function closeMatchWithScore(matchId,editing=false){
  }
  const {error:saveError}=await db.rpc('close_match_with_scores',{p_match_id:matchId,p_scores:scores});
  if(saveError)return toast('Não foi possível salvar o placar: '+saveError.message);
- toast(editing?'Placar corrigido.':'Pelada encerrada e placar salvo.');
+ toast(editing?'Placar corrigido.':'Jogo encerrado e placar salvo.');
  await loadApp();
 }
 async function deleteMatch(matchId){
- if(!admin)return toast('Somente administradores podem excluir peladas.');
+ if(!admin)return toast('Somente administradores podem excluir jogos.');
  const match=matches.find(item=>item.id===matchId);
- if(!match)return toast('Pelada não encontrada. Atualize a página e tente novamente.');
- const warning=`Deseja realmente excluir a pelada "${match.title}" (${dt(match.starts_at)})?\n\nEsta ação remove a pelada, as presenças, os links e os times associados. Não pode ser desfeita.`;
+ if(!match)return toast('Jogo não encontrado. Atualize a página e tente novamente.');
+ const warning=`Deseja realmente excluir o jogo "${match.title}" (${dt(match.starts_at)})?\n\nEsta ação remove o jogo, as presenças, os links e os times associados. Não pode ser desfeita.`;
  if(!confirm(warning))return;
  const {error}=await db.from('matches').delete().eq('id',matchId).eq('group_id',cfg.GROUP_ID);
  if(error){
-  console.error('Erro ao excluir pelada:',error);
-  return toast('Não foi possível excluir a pelada: '+error.message);
+  console.error('Erro ao excluir jogo:',error);
+  return toast('Não foi possível excluir o jogo: '+error.message);
  }
- toast('Pelada excluída.');
+ toast('Jogo excluído.');
  await loadApp();
 }
 $('group-attendance-link').addEventListener('click',makeGroupAttendanceLink);
@@ -363,9 +363,9 @@ function openWhatsAppMessage(text){
 }
 function buildMatchInviteMessage(match,token){
  const rows=[
-  '⚽ *Nova pelada!*',
+  '⚽ *Novo jogo!*',
   '',
-  `*${match.title||'Pelada'}*`,
+  `*${match.title||'Jogo'}*`,
   `📅 ${dt(match.starts_at)}`
  ];
  if(match.location)rows.push(`📍 ${match.location}`);
@@ -373,9 +373,9 @@ function buildMatchInviteMessage(match,token){
  return rows.join('\n');
 }
 async function shareMatchInviteToWhatsApp(matchId){
- if(!admin)return toast('Somente administradores podem compartilhar o aviso da pelada.');
+ if(!admin)return toast('Somente administradores podem compartilhar o aviso do jogo.');
  const match=matches.find(item=>item.id===matchId);
- if(!match||match.status!=='scheduled')return toast('Esta pelada não está em aberto.');
+ if(!match||match.status!=='scheduled')return toast('Este jogo não está em aberto.');
  // Open a blank tab synchronously so the browser does not block WhatsApp after the RPC returns.
  const popup=window.open('about:blank','_blank');
  try{
@@ -630,7 +630,7 @@ function buildDivisionClipboardText(matchId){
   const names=roster.map(player=>`- ${player.display_name}${player.id===team.goalkeeper_member_id?' 🧤':''}`);
   return [team.name,...names].join('\n');
  });
- return [`Pelada: ${match.title}`,`Data: ${dt(match.starts_at)}`,'',...sections].join('\n\n').trim();
+ return [`Jogo: ${match.title}`,`Data: ${dt(match.starts_at)}`,'',...sections].join('\n\n').trim();
 }
 function buildDivisionWhatsAppMessage(matchId){
  const match=matches.find(item=>item.id===matchId);
@@ -674,7 +674,7 @@ $('teams').addEventListener('change',async e=>{
  if(!admin)return toast('Somente administradores podem ajustar a divisão.');
  const matchId=select.dataset.matchMove,playerId=select.dataset.playerMove,targetName=select.value,currentName=select.dataset.currentTeam;
  const match=matches.find(m=>m.id===matchId);
- if(!match||match.status!=='scheduled')return toast('Somente peladas em aberto podem ter a divisão ajustada.');
+ if(!match||match.status!=='scheduled')return toast('Somente jogos em aberto podem ter a divisão ajustada.');
  const teams=teamDrafts.get(matchId)||[];
  const source=teams.find(t=>t.name===currentName),target=teams.find(t=>t.name===targetName);
  if(!source||!target||source===target){await renderTeams();return;}
@@ -714,7 +714,7 @@ $('teams').addEventListener('click',async e=>{
 async function saveManualDivision(matchId){
  if(!admin)return toast('Somente administradores podem ajustar a divisão.');
  const match=matches.find(m=>m.id===matchId);
- if(!match||match.status!=='scheduled')return toast('Somente peladas em aberto podem ter a divisão ajustada.');
+ if(!match||match.status!=='scheduled')return toast('Somente jogos em aberto podem ter a divisão ajustada.');
  if(!dirtyTeamDivisions.has(matchId))return;
  const teams=teamDrafts.get(matchId)||[];
  if(teams.length<2)return toast('A divisão precisa ter pelo menos dois times.');
@@ -731,7 +731,7 @@ async function saveManualDivision(matchId){
  const {error}=await db.rpc('save_balanced_teams',{p_match_id:matchId,p_teams:payload});
  if(error){if(button)button.disabled=false;return toast('Não foi possível salvar a divisão ajustada: '+error.message);}
  dirtyTeamDivisions.delete(matchId);teamDrafts.delete(matchId);
- toast('Divisão manual salva. Ela será preservada ao encerrar a pelada.');
+ toast('Divisão manual salva. Ela será preservada ao encerrar o jogo.');
  await loadApp();
 }
 function populateCashMembers(){
@@ -828,7 +828,7 @@ async function loadPublicBalance(){const {data,error}=await db.rpc('get_group_ba
 function buildMatchResultWhatsAppMessage(game){
  const teams=Array.isArray(game?.teams)?game.teams:[];
  if(!game||!teams.length)return '';
- const rows=['🏆 *Resultado da pelada*','',`*${game.title||'Pelada'}*`,`📅 ${dt(game.starts_at)}`];
+ const rows=['🏆 *Resultado do jogo*','',`*${game.title||'Jogo'}*`,`📅 ${dt(game.starts_at)}`];
  if(game.location)rows.push(`📍 ${game.location}`);
  rows.push('');
  teams.forEach(team=>{
@@ -857,7 +857,7 @@ async function loadMatchHistory(containerId){
   return;
  }
  const games=Array.isArray(data)?data:[];
- if(!games.length){el.innerHTML='<div class="empty">Ainda não há peladas encerradas com histórico disponível.</div>';return;}
+ if(!games.length){el.innerHTML='<div class="empty">Ainda não há jogos encerrados com histórico disponível.</div>';return;}
  games.forEach(game=>matchHistoryById.set(String(game.match_id),game));
  el.innerHTML=games.map(game=>{
   const teams=Array.isArray(game.teams)?game.teams:[];
@@ -868,16 +868,16 @@ async function loadMatchHistory(containerId){
    const roster=players.length?`<ul>${players.map(name=>`<li>${esc(name)}</li>`).join('')}</ul>`:'<p class="muted small">Nenhum jogador registrado nesta equipe.</p>';
    const score=team.score===null||team.score===undefined?'—':esc(team.score);
    return `<article class="history-team"><div class="history-team-heading"><h3>${esc(team.name||'Time')}</h3><span class="history-team-score">${score} <small>gols</small></span></div>${roster}</article>`;
-  }).join(''):'<div class="empty">A divisão dos times não foi salva para esta pelada.</div>';
+  }).join(''):'<div class="empty">A divisão dos times não foi salva para este jogo.</div>';
   const when=dt(game.starts_at);
   const location=game.location?` · ${esc(game.location)}`:'';
   const washer=game.vest_washer_name?`<small class="history-washer">🧺 <b>Responsável por lavar os coletes:</b> ${esc(game.vest_washer_name)}</small>`:'<small class="history-washer muted">🧺 Responsável por lavar os coletes: Não informado</small>';
-  return `<article class="history-game"><div class="history-game-heading"><div><p class="eyebrow">PELADEIRA ENCERRADA</p><h2>${esc(game.title||'Pelada sem nome')}</h2><small>${when}${location}</small>${washer}</div><span class="pill history-closed-pill">Encerrada</span></div>${scoreline}<div class="history-teams">${teamsMarkup}</div><div class="history-share-actions"><button type="button" class="secondary" data-share-result="${esc(game.match_id)}">📲 Compartilhar resultado no WhatsApp</button></div></article>`;
+  return `<article class="history-game"><div class="history-game-heading"><div><p class="eyebrow">PELADEIRA ENCERRADA</p><h2>${esc(game.title||'Jogo sem nome')}</h2><small>${when}${location}</small>${washer}</div><span class="pill history-closed-pill">Encerrada</span></div>${scoreline}<div class="history-teams">${teamsMarkup}</div><div class="history-share-actions"><button type="button" class="secondary" data-share-result="${esc(game.match_id)}">📲 Compartilhar resultado no WhatsApp</button></div></article>`;
  }).join('');
  el.querySelectorAll('[data-share-result]').forEach(button=>button.addEventListener('click',()=>{
   const game=matchHistoryById.get(String(button.dataset.shareResult));
   const text=buildMatchResultWhatsAppMessage(game);
-  if(!text)return toast('Não foi possível montar o resultado desta pelada.');
+  if(!text)return toast('Não foi possível montar o resultado deste jogo.');
   openWhatsAppMessage(text);
  }));
 }
@@ -996,7 +996,7 @@ async function loadGroupAttendance(token,preserveMatchId=null,preserveMemberId=n
  $('public-member-select').disabled=true;
  const {data,error}=await db.rpc('get_group_attendance_matches',{p_token:token});
  if(error){
-  $('public-title').textContent='Não foi possível carregar as peladas';
+  $('public-title').textContent='Não foi possível carregar os jogos';
   $('public-meta').textContent='';
   msg('public-message','Erro ao carregar o link do grupo: '+error.message,true);
   show('public-roster-summary',false);
@@ -1005,9 +1005,9 @@ async function loadGroupAttendance(token,preserveMatchId=null,preserveMemberId=n
  publicGroupMatches=Array.from(new Map((data||[]).map(match=>[match.match_id,match])).values());
  if(!publicGroupMatches.length){
   activePublicMatchId=null;
-  $('public-title').textContent='Nenhuma pelada disponível';
+  $('public-title').textContent='Nenhum jogo disponível';
   $('public-meta').textContent='';
-  $('public-match-select').innerHTML='<option value="">Nenhuma pelada agendada</option>';
+  $('public-match-select').innerHTML='<option value="">Nenhum jogo agendada</option>';
   $('public-member-select').innerHTML='<option value="">Nenhum jogador disponível</option>';
   $('public-match-select').disabled=true;
   $('public-member-select').disabled=true;
@@ -1015,7 +1015,7 @@ async function loadGroupAttendance(token,preserveMatchId=null,preserveMemberId=n
   $('add-guest-button').disabled=true;
   show('guest-registration',false);
   show('public-roster-summary',false);
-  msg('public-message','Não há peladas agendadas neste grupo ou o link não é mais válido. Peça ao administrador para verificar.',true);
+  msg('public-message','Não há jogos agendados neste grupo ou o link não é mais válido. Peça ao administrador para verificar.',true);
   return;
  }
  const select=$('public-match-select');
@@ -1027,7 +1027,7 @@ async function loadGroupAttendance(token,preserveMatchId=null,preserveMemberId=n
  select.onchange=async()=>{
   const memberId=$('public-member-select').value;
   activePublicMatchId=select.value;
-  try{await loadGroupMatchAttendance(token,activePublicMatchId,memberId)}catch(err){msg('public-message','Não foi possível carregar a pelada: '+err.message,true)}
+  try{await loadGroupMatchAttendance(token,activePublicMatchId,memberId)}catch(err){msg('public-message','Não foi possível carregar o jogo: '+err.message,true)}
  };
  await loadGroupMatchAttendance(token,activePublicMatchId,preserveMemberId);
 }
@@ -1036,7 +1036,7 @@ async function loadGroupMatchAttendance(token,matchId,preserveMemberId=null){
  publicToken=null;
  activePublicMatchId=matchId;
  const match=publicGroupMatches.find(m=>m.match_id===matchId);
- if(!match){msg('public-message','Selecione uma pelada disponível.',true);return}
+ if(!match){msg('public-message','Selecione um jogo disponível.',true);return}
  $('yes').disabled=$('no').disabled=true;
  $('public-member-select').disabled=true;
  const {data,error}=await db.rpc('get_group_match_attendance_info',{p_token:token,p_match_id:matchId});
@@ -1090,7 +1090,7 @@ async function respond(token,memberId,status){
  if(publicGroupToken)await loadGroupMatchAttendance(publicGroupToken,matchId,memberId);
  else await loadAttendance(token,memberId);
  const player=publicPlayers.find(p=>p.member_id===memberId);
- const responseMessage=player?.attendance_status==='waitlist'?'A pelada está lotada. Você entrou na lista de espera.':status==='confirmed'?'Presença confirmada! ⚽':'Ausência registrada.';
+ const responseMessage=player?.attendance_status==='waitlist'?'O jogo está lotado. Você entrou na lista de espera.':status==='confirmed'?'Presença confirmada! ⚽':'Ausência registrada.';
  msg('public-message',responseMessage);
  const copied=await copyAttendanceListToClipboard();
  if(copied)msg('public-message',responseMessage+' Lista atualizada copiada para a área de transferência.');
@@ -1119,7 +1119,7 @@ $('guest-form').addEventListener('submit',async e=>{
   if(publicGroupToken)await loadGroupMatchAttendance(publicGroupToken,activePublicMatchId,data);
   else await loadAttendance(publicToken,data);
   const added=publicPlayers.find(p=>p.member_id===data);
-  if(added?.attendance_status==='waitlist')msg('guest-message',`${added.player_name} foi cadastrado com níveis iniciais 3,0/3,0/3,0, mas a pelada está lotada e entrou na lista de espera.`);
+  if(added?.attendance_status==='waitlist')msg('guest-message',`${added.player_name} foi cadastrado com níveis iniciais 3,0/3,0/3,0, mas o jogo está lotado e entrou na lista de espera.`);
   else msg('guest-message',`${added?.player_name||name} foi cadastrado com níveis iniciais 3,0 em ataque, defesa e histórico e teve a presença confirmada! ⚽`);
  }catch(err){msg('guest-message',err.message||'Ocorreu um erro ao cadastrar o convidado.',true)}
  finally{button.disabled=false;}

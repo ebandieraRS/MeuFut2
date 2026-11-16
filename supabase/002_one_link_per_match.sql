@@ -1,4 +1,4 @@
--- Migração para trocar links individuais por um único link por pelada.
+-- Migração para trocar links individuais por um único link por jogo.
 -- Execute depois de 001_schema_and_security.sql no SQL Editor do Supabase.
 -- Um link é um bearer token: quem o possui pode selecionar qualquer jogador ativo
 -- do grupo. Compartilhe-o somente no grupo esperado.

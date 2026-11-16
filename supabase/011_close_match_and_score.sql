@@ -51,7 +51,7 @@ BEGIN
   END IF;
 
   IF v_status NOT IN ('scheduled', 'completed') THEN
-    RAISE EXCEPTION 'Esta pelada não pode ser encerrada neste estado.';
+    RAISE EXCEPTION 'Este jogo não pode ser encerrada neste estado.';
   END IF;
 
   SELECT count(*) INTO v_team_count
@@ -59,7 +59,7 @@ BEGIN
    WHERE t.match_id = p_match_id;
 
   IF v_team_count < 2 THEN
-    RAISE EXCEPTION 'A pelada precisa ter uma divisão salva com pelo menos dois times.';
+    RAISE EXCEPTION 'O jogo precisa ter uma divisão salva com pelo menos dois times.';
   END IF;
 
   IF p_scores IS NULL
@@ -95,7 +95,7 @@ BEGIN
        AND match_id = p_match_id;
 
     IF NOT FOUND THEN
-      RAISE EXCEPTION 'Um dos times informados não pertence a esta pelada.';
+      RAISE EXCEPTION 'Um dos times informados não pertence a este jogo.';
     END IF;
   END LOOP;
 
